@@ -129,18 +129,44 @@ Writers can never `INSERT` into `dist_test_global` — enforced by SQL `REVOKE`.
 
 | Tool | Minimum version | Install |
 |------|----------------|---------|
-| Docker | 20+ | https://docs.docker.com/get-docker/ |
+| Docker **or** Podman | Docker 20+ / Podman 4.3+ | see below |
 | kind | 0.20+ | `brew install kind` |
 | kubectl | 1.28+ | `brew install kubectl` |
 | Helm | 3.12+ | `brew install helm` |
 | clickhouse-client | any | `brew install clickhouse` (optional, for local queries) |
 
-Verify:
+**Docker:**
+```bash
+# macOS / Windows: Docker Desktop  https://docs.docker.com/get-docker/
+docker info
+```
+
+**Podman (alternative to Docker):**
+```bash
+# macOS
+brew install podman
+podman machine init
+podman machine start
+
+# Linux (rootless)
+# Install via your distro's package manager, then:
+systemctl --user enable --now podman.socket
+# Ensure cgroup v2 is enabled: cat /sys/fs/cgroup/cgroup.controllers
+
+# Verify
+podman info
+```
+
+`setup.sh` auto-detects which runtime is running and sets
+`KIND_EXPERIMENTAL_PROVIDER=podman` for kind automatically — no manual
+configuration required.
+
+Verify all tools:
 ```bash
 kind version
 kubectl version --client
 helm version
-docker info
+docker info   # or: podman info
 ```
 
 ---
@@ -176,7 +202,11 @@ bash poc/scripts/verify.sh
 `setup.sh` runs these steps in order:
 
 ### 1. Prerequisite check
-Verifies `kind`, `kubectl`, `helm`, and `docker` are on `$PATH`.
+Verifies `kind`, `kubectl`, and `helm` are on `$PATH`, then calls
+`detect_runtime()` which tries Docker first, then Podman. If Podman is
+selected, `KIND_EXPERIMENTAL_PROVIDER=podman` is exported for the rest of the
+script so every subsequent `kind` command uses the correct backend. Exits with
+a clear message if neither runtime is reachable.
 
 ### 2. kind cluster
 Creates a single kind cluster named `geo-poc` from `poc/kind-config.yaml`.

@@ -2,7 +2,7 @@
 # Full POC setup: kind cluster + external Keepers + ClickHouse (Helm) for FRA/MUC/HAM.
 # Run from the repo root:  bash poc/setup.sh
 #
-# Prerequisites: kind, kubectl, helm, docker
+# Prerequisites: kind, kubectl, helm, docker OR podman
 
 set -euo pipefail
 
@@ -15,10 +15,26 @@ HELM_VALUES="$SCRIPT_DIR/helm"
 log()  { echo ""; echo "▶  $*"; }
 info() { echo "   $*"; }
 
+# Detect container runtime and export KIND_EXPERIMENTAL_PROVIDER when using
+# Podman. Must be called before any `kind` command.
+detect_runtime() {
+    if command -v docker &>/dev/null && docker info &>/dev/null 2>&1; then
+        CONTAINER_RUNTIME=docker
+    elif command -v podman &>/dev/null && podman info &>/dev/null 2>&1; then
+        CONTAINER_RUNTIME=podman
+        export KIND_EXPERIMENTAL_PROVIDER=podman
+    else
+        echo "ERROR: no container runtime found or running."
+        echo "  Start Docker Desktop / podman machine start, then retry."
+        exit 1
+    fi
+    info "Container runtime: $CONTAINER_RUNTIME"
+}
+
 check_prereqs() {
     log "Checking prerequisites"
     local missing=()
-    for cmd in kind kubectl helm docker; do
+    for cmd in kind kubectl helm; do
         if ! command -v "$cmd" &>/dev/null; then
             missing+=("$cmd")
         else
@@ -29,6 +45,7 @@ check_prereqs() {
         echo "ERROR: missing required tools: ${missing[*]}"
         exit 1
     fi
+    detect_runtime
 }
 
 wait_for_pods() {
