@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Runs smoke tests: inserts, cross-DC query, shard pruning, RBAC check.
-# Run from the repo root: bash poc/scripts/verify.sh
+# Run from the repo root: bash scripts/verify.sh
 
 set -euo pipefail
 

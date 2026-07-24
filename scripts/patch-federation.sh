@@ -5,7 +5,7 @@
 # Cross-cluster routing: all kind clusters share the Docker/Podman "kind"
 # network. A pod in FRA can reach NodePort 30901 on the MUC node IP directly.
 #
-# Run from the repo root: bash poc/scripts/patch-federation.sh
+# Run from the repo root: bash scripts/patch-federation.sh
 
 set -euo pipefail
 

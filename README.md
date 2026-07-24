@@ -35,10 +35,10 @@ crosses a DC boundary.
 │  │ fra-keeper-0       │  │   │  │ muc-keeper-0       │  │   │  │ ham-keeper-0       │  │
 │  │ (ClickHouseKeeper) │  │   │  │ (ClickHouseKeeper) │  │   │  │ (ClickHouseKeeper) │  │
 │  └────────┬───────────┘  │   │  └────────┬───────────┘  │   │  └────────┬───────────┘  │
-│           │ ZooKeeper    │   │           │ ZooKeeper    │   │           │ ZooKeeper    │
+│           │ (Keeper)     │   │           │ (Keeper)     │   │           │ (Keeper)     │
 │  ┌────────▼───────────┐  │   │  ┌────────▼───────────┐  │   │  ┌────────▼───────────┐  │
-│  │ fra-shard-0-0      │  │   │  │ muc-shard-0-0      │  │   │  │ ham-shard-0-0      │  │
-│  │ (ClickHouse Helm)  │  │   │  │ (ClickHouse Helm)  │  │   │  │ (ClickHouse Helm)  │  │
+│  │ fra-clickhouse-0   │  │   │  │ muc-clickhouse-0   │  │   │  │ ham-clickhouse-0   │  │
+│  │ (ClickHouseCluster)│  │   │  │ (ClickHouse Helm)  │  │   │  │ (ClickHouse Helm)  │  │
 │  └────────────────────┘  │   │  └────────────────────┘  │   │  └────────────────────┘  │
 │  NodePort 30901 (TCP)    │   │  NodePort 30902 (TCP)    │   │  NodePort 30903 (TCP)    │
 │  NodePort 30801 (HTTP)   │   │  NodePort 30802 (HTTP)   │   │  NodePort 30803 (HTTP)   │
@@ -108,26 +108,22 @@ Writers can never `INSERT` into `dist_test_global` — enforced by SQL `REVOKE`.
 │   └── 05_verification/
 │       └── sanity_checks.sql
 ├── example_queries.txt
-└── poc/                                           # Local Kubernetes POC
-    ├── setup.sh                                   # ← single entry point
-    ├── teardown.sh
-    ├── manifests/
-    │   ├── fra/
-    │   │   ├── kind.yaml                          # kind cluster: clickhouse-multi-dc-federation-demo-fra
-    │   │   ├── 00-namespace.yaml
-    │   │   ├── 01-clickhouse-crs.yaml             # KeeperCluster + ClickHouseCluster CRs
-    │   │   └── 02-nodeport.yaml                   # NodePort for host and cross-cluster access
-    │   ├── muc/  (same)
-    │   └── ham/  (same)
-    ├── helm/
-    │   ├── fra/values.yaml                        # ClickHouse Helm values (local cluster only)
-    │   ├── muc/values.yaml
-    │   └── ham/values.yaml
-    └── scripts/
-        ├── wait-for-pods.sh
-        ├── patch-federation.sh                    # Discovers node IPs, injects federated_dcs
-        ├── apply-schemas.sh                       # SQL in correct order
-        └── verify.sh                              # Inserts + cross-DC queries + RBAC check
+├── setup.sh                                       # ← single entry point
+├── teardown.sh
+├── manifests/
+│   ├── fra/
+│   │   ├── kind.yaml                              # kind cluster: clickhouse-multi-dc-federation-demo-fra
+│   │   ├── 00-namespace.yaml
+│   │   ├── 01-clickhouse-crs.yaml                 # KeeperCluster + ClickHouseCluster CRs
+│   │   └── 02-nodeport.yaml                       # NodePort for host and cross-cluster access
+│   ├── muc/  (same)
+│   └── ham/  (same)
+└── scripts/
+    ├── wait-for-pods.sh
+    ├── patch-federation.sh                        # Discovers node IPs, injects federated_dcs
+    ├── setup-tls.sh                               # Generates certs, secrets, patches CRs for TLS
+    ├── apply-schemas.sh                           # SQL in correct order
+    └── verify.sh                                  # Inserts + cross-DC queries + RBAC check
 ```
 
 ---
@@ -186,7 +182,7 @@ cd /path/to/clickhouse-multi-dc-federation
 
 # Full setup: creates 3 clusters, deploys keepers, installs ClickHouse,
 # patches federation config, applies schemas
-bash poc/setup.sh
+bash setup.sh
 ```
 
 Total time: ~8–12 minutes on first run (dominated by pulling 3× CH + 3× Keeper
@@ -201,7 +197,7 @@ When the script finishes:
 
 Run the full verification suite:
 ```bash
-bash poc/scripts/verify.sh
+bash scripts/verify.sh
 ```
 
 ---
@@ -220,9 +216,9 @@ script so every subsequent `kind` command uses the correct backend.
 Creates one cluster per DC from the per-DC config files:
 
 ```bash
-kind create cluster --config poc/manifests/fra/kind.yaml   # clickhouse-multi-dc-federation-demo-fra
-kind create cluster --config poc/manifests/muc/kind.yaml   # clickhouse-multi-dc-federation-demo-muc
-kind create cluster --config poc/manifests/ham/kind.yaml   # clickhouse-multi-dc-federation-demo-ham
+kind create cluster --config manifests/fra/kind.yaml   # clickhouse-multi-dc-federation-demo-fra
+kind create cluster --config manifests/muc/kind.yaml   # clickhouse-multi-dc-federation-demo-muc
+kind create cluster --config manifests/ham/kind.yaml   # clickhouse-multi-dc-federation-demo-ham
 ```
 
 Each cluster is a single-node (control-plane only, taint removed via
@@ -232,62 +228,33 @@ Skip if a cluster already exists.
 ### 3. Namespaces
 Creates namespace `fra`, `muc`, or `ham` inside each respective cluster.
 
-### 4. External Keepers
-Applies `poc/manifests/{dc}/01-keeper.yaml` to the matching cluster. Each
-manifest contains:
+### 4. Deploy KeeperCluster + ClickHouseCluster CRs
+Applies `manifests/{dc}/01-clickhouse-crs.yaml` to each cluster. The operator
+reconciles the CRs and creates:
 
-- **ConfigMap** (`{dc}-keeper-config`): `keeper_config.xml` with
-  `<listen_host>0.0.0.0</listen_host>`, `tcp_port 2181`, and a single-node
-  `raft_configuration` pointing to `localhost:9234` (avoids DNS bootstrap race).
-- **Service** (`{dc}-keeper`, headless): provides in-cluster DNS
-  `{dc}-keeper-0.{dc}-keeper.{dc}.svc.cluster.local`.
-- **StatefulSet** (`{dc}-keeper`): one pod running
-  `clickhouse/clickhouse-keeper:latest` with an explicit
-  `--config-file` arg, a `startupProbe` (300 s window), and readiness/liveness
-  probes on `tcpSocket:2181`.
+- A **KeeperCluster** (`{dc}-keeper`): single-node Keeper pod
+  (`{dc}-keeper-0-0`) with headless service `{dc}-keeper-headless`.
+- A **ClickHouseCluster** (`{dc}`): single shard, single replica CH pod
+  (`{dc}-clickhouse-0-0-0`) with headless service `{dc}-clickhouse-headless`.
 
-Waits for all three Keeper pods to pass the readiness probe.
+Then applies `manifests/{dc}/02-nodeport.yaml` to expose each DC's HTTP, TCP,
+and TLS ports on the kind node.
 
-### 5. ClickHouse via Helm
-Adds the ClickHouse Helm repo and installs one release per cluster:
+Waits for all Keeper and CH pods to become Ready.
 
-```bash
-helm install fra clickhouse/clickhouse \
-  --kube-context kind-clickhouse-multi-dc-federation-demo-fra \
-  --namespace fra -f poc/helm/fra/values.yaml --wait
-# same for muc and ham
-```
-
-Key settings in each `values.yaml`:
-
-| Key | Value | Effect |
-|-----|-------|--------|
-| `fullnameOverride` | `fra` / `muc` / `ham` | Predictable StatefulSet/service names |
-| `shards` / `replicaCount` | `1` / `1` | Single shard, single replica per DC |
-| `clusterName` | `fra_local` etc. | ClickHouse `{cluster}` macro |
-| `keeper.enabled` | `false` | Use external Keeper (step 4) |
-| `extraConfigFiles.zookeeper.xml` | DC-local Keeper FQDN | Keeper connection |
-| `extraConfigFiles.remote_servers.xml` | Local cluster only (no `federated_dcs` yet) | Patched in step 7 |
-| `extraConfigFiles.listen.xml` | `0.0.0.0` | Accept cross-cluster connections |
-| `extraConfigFiles.users_network.xml` | `::/0` | Allow `default` user from any IP |
-
-NodePort services are applied after Helm install to expose each DC on the host.
-
-### 6. Naming verification
-Prints actual pod and service names from each cluster so you can confirm the
-FQDNs in `remote_servers.xml` are correct before proceeding.
-
-### 7. Patch federated_dcs (`patch-federation.sh`)
-Discovers the InternalIP of each cluster's kind node, generates a
-`federated_dcs` remote_servers block with those IPs + the DC's NodePort, and
-runs `helm upgrade --reuse-values -f /tmp/patch.yaml` on each cluster:
+### 5. Patch federated_dcs (`patch-federation.sh`)
+Discovers the InternalIP of each cluster's kind node and patches the
+`ClickHouseCluster` CR on each DC with a `federated_dcs` remote_servers block
+using those IPs and NodePorts:
 
 ```
-FRA node IP: 172.18.0.2  → used as shard 0 in federated_dcs (port 30901)
-MUC node IP: 172.18.0.3  → used as shard 1 in federated_dcs (port 30902)
-HAM node IP: 172.18.0.4  → used as shard 2 in federated_dcs (port 30903)
+FRA node IP: 172.18.0.2  → shard 0 in federated_dcs (localhost:9001 for FRA, NodePort for others)
+MUC node IP: 172.18.0.3  → shard 1 in federated_dcs (localhost:9001 for MUC, NodePort for others)
+HAM node IP: 172.18.0.4  → shard 2 in federated_dcs (localhost:9001 for HAM, NodePort for others)
 ```
 
+Each DC uses `localhost:9001` for its own shard so ClickHouse marks it
+`is_local=1` and reads locally instead of going through a network hop.
 Followed by `SYSTEM RELOAD CONFIG` on each CH pod.
 
 **Why NodePort IPs work across clusters:** all kind nodes share the Docker/
@@ -297,13 +264,13 @@ kindnet NAT), which then reaches the MUC node on the shared kind network.
 kube-proxy on the MUC node forwards the NodePort to the MUC CH pod.
 
 ### 8. TLS setup (`setup-tls.sh`)
-Runs `poc/scripts/setup-tls.sh` which generates certs, creates K8s Secrets,
+Runs `scripts/setup-tls.sh` which generates certs, creates K8s Secrets,
 adds the `tcp-secure` NodePorts, patches all three `ClickHouseCluster` CRs,
 and restarts pods if needed. See
 [Design notes → TLS](#tls-for-cross-dc-communication) for details.
 
 ### 9. Schema deployment
-Runs `poc/scripts/apply-schemas.sh` with `--context kind-clickhouse-multi-dc-federation-demo-{dc}` on every kubectl/helm call:
+Runs `scripts/apply-schemas.sh` with `--context kind-clickhouse-multi-dc-federation-demo-{dc}` for each DC:
 
 ```
 Tier 1 (per DC): 01_tier1_local/{dc}_test_local.sql
@@ -316,33 +283,22 @@ RBAC  (per DC):  04_rbac/roles_and_grants.sql
 
 ## Verifying pod naming
 
-The Helm chart produces names from `fullnameOverride`. The assumed naming is:
+The operator derives names from the CR name (`fra`, `muc`, `ham`):
 
 | Object | Expected name (FRA example) |
 |--------|------------------------------|
-| StatefulSet | `fra-shard-0` |
-| Pod | `fra-shard-0-0` |
-| Headless service | `fra-headless` |
-| Pod FQDN (in-cluster) | `fra-shard-0-0.fra-headless.fra.svc.cluster.local` |
+| CH StatefulSet | `fra-clickhouse-0-0` |
+| CH Pod | `fra-clickhouse-0-0-0` |
+| CH headless service | `fra-clickhouse-headless` |
+| CH Pod FQDN (in-cluster) | `fra-clickhouse-0-0-0.fra-clickhouse-headless.fra.svc.cluster.local` |
+| Keeper Pod | `fra-keeper-0-0` |
+| Keeper headless service | `fra-keeper-headless` |
 
-Check actual names after Helm install:
+Check actual names after setup:
 ```bash
 kubectl get pods,svc --context kind-clickhouse-multi-dc-federation-demo-fra -n fra
 kubectl get pods,svc --context kind-clickhouse-multi-dc-federation-demo-muc -n muc
 kubectl get pods,svc --context kind-clickhouse-multi-dc-federation-demo-ham -n ham
-```
-
-If the headless service name differs (e.g. `fra` instead of `fra-headless`),
-update `extraConfigFiles.remote_servers.xml` in `poc/helm/{dc}/values.yaml`,
-then re-run:
-
-```bash
-helm upgrade fra clickhouse/clickhouse \
-  --kube-context kind-clickhouse-multi-dc-federation-demo-fra \
-  --namespace fra -f poc/helm/fra/values.yaml --wait
-
-kubectl exec --context kind-clickhouse-multi-dc-federation-demo-fra \
-  -n fra fra-shard-0-0 -- clickhouse-client --query "SYSTEM RELOAD CONFIG"
 ```
 
 ---
@@ -454,7 +410,7 @@ See `example_queries.txt` for the complete annotated query set.
 ## Teardown
 
 ```bash
-bash poc/teardown.sh
+bash teardown.sh
 ```
 
 Deletes all three kind clusters:
@@ -549,7 +505,7 @@ Alternatively, run `SYSTEM FLUSH LOGS` then check `system.query_log.read_rows`
 same data.
 
 **TLS for cross-DC communication**
-`poc/scripts/setup-tls.sh` adds mutual TLS to all CH-to-CH federation traffic.
+`scripts/setup-tls.sh` adds mutual TLS to all CH-to-CH federation traffic.
 It is called automatically by `setup.sh` (step 8) and can also be run standalone
 to retrofit TLS onto a running POC.
 

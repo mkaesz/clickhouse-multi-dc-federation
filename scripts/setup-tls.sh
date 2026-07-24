@@ -5,7 +5,7 @@
 #   - use TLS for all cross-DC federated_dcs connections
 #
 # Designed to run after patch-federation.sh and before apply-schemas.sh.
-# Run from the repo root: bash poc/scripts/setup-tls.sh
+# Run from the repo root: bash scripts/setup-tls.sh
 
 set -euo pipefail
 
@@ -307,7 +307,7 @@ verify_tls ham "$HAM_CTX"
 FRA_POD=$(kubectl get pods --context "$FRA_CTX" -n fra \
     -l "clickhouse.com/role=clickhouse-server" \
     -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
-bash poc/scripts/verify.sh 2>&1 | grep -E "===|PASS|FAIL|row_count|count" || true
+bash scripts/verify.sh 2>&1 | grep -E "===|PASS|FAIL|row_count|count" || true
 
 echo ""
 echo "=== TLS setup complete ==="

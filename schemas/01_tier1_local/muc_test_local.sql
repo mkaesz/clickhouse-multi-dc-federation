@@ -1,7 +1,7 @@
 -- Tier 1: Local table (the actual data)
 -- DC: MUC
 -- The operator creates 'default' as a Replicated database, so ReplicatedMergeTree
--- must be used without explicit ZooKeeper paths (the database handles them).
+-- must be used without explicit Keeper paths (the database handles them).
 
 CREATE TABLE IF NOT EXISTS default.test_local ON CLUSTER 'default'
 (

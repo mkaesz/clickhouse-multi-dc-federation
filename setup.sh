@@ -4,7 +4,7 @@
 # ClickHouseCluster.  Cross-DC federation is wired via NodePort on the shared
 # kind Docker/Podman network.
 #
-# Run from the repo root:  bash poc/setup.sh
+# Run from the repo root:  bash setup.sh
 #
 # Prerequisites: kind, kubectl, helm, docker OR podman
 
@@ -203,10 +203,10 @@ print_summary() {
     echo "    curl 'http://localhost:8801/?query=SELECT+dc_name,count()+FROM+default.dist_test_global+GROUP+BY+dc_name'"
     echo ""
     echo "  Full verification suite:"
-    echo "    bash poc/scripts/verify.sh"
+    echo "    bash scripts/verify.sh"
     echo ""
     echo "  Tear down all 3 clusters:"
-    echo "    bash poc/teardown.sh"
+    echo "    bash teardown.sh"
 }
 
 # ── main ──────────────────────────────────────────────────────────────────────

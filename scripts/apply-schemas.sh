@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Applies ClickHouse schemas in the correct deployment order across all 3 DCs.
-# Run from the repo root: bash poc/scripts/apply-schemas.sh
+# Run from the repo root: bash scripts/apply-schemas.sh
 
 set -euo pipefail
 
