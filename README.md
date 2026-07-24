@@ -573,10 +573,6 @@ What it does:
 
 Connect over TLS from the host:
 
-The kind `extraPortMappings` for ports 9841/9842/9843 only take effect at
-cluster creation. On an already-running cluster use `kubectl port-forward`
-instead:
-
 ```bash
 # Create a client config that trusts the POC CA (one-time)
 cat > /tmp/ch-tls-client.xml <<'EOF'
@@ -590,25 +586,15 @@ cat > /tmp/ch-tls-client.xml <<'EOF'
 </config>
 EOF
 
-# Open TLS tunnels to each DC
-kubectl port-forward --context kind-clickhouse-multi-dc-federation-demo-fra \
-  -n fra fra-clickhouse-0-0-0 19841:9440 &
-kubectl port-forward --context kind-clickhouse-multi-dc-federation-demo-muc \
-  -n muc muc-clickhouse-0-0-0 19842:9440 &
-kubectl port-forward --context kind-clickhouse-multi-dc-federation-demo-ham \
-  -n ham ham-clickhouse-0-0-0 19843:9440 &
-
-# Connect with full cert validation
-clickhouse client --host 127.0.0.1 --port 19841 --secure \
-  --config-file /tmp/ch-tls-client.xml \
-  --query "SELECT 'TLS OK', version()"
+clickhouse client --host 127.0.0.1 --port 9841 --secure --config-file /tmp/ch-tls-client.xml   # FRA
+clickhouse client --host 127.0.0.1 --port 9842 --secure --config-file /tmp/ch-tls-client.xml   # MUC
+clickhouse client --host 127.0.0.1 --port 9843 --secure --config-file /tmp/ch-tls-client.xml   # HAM
 ```
 
-On a fresh cluster created by `setup.sh`, the dedicated host ports work directly:
-```bash
-clickhouse client --host localhost --port 9841 --secure \
-  --config-file /tmp/ch-tls-client.xml   # FRA
-```
+> **Note:** `clickhouse client` has no `--ssl-ca-cert-file` flag. The CA must
+> be supplied via `--config-file` with an `<openSSL><client><caConfig>` block.
+> `--accept-invalid-certificate` skips validation entirely and is only for
+> quick smoke tests.
 
 `verificationMode: relaxed` is used — the client verifies the server cert
 against the CA but does not require a client cert. This is appropriate for
