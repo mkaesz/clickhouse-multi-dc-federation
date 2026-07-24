@@ -1,0 +1,38 @@
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: geo-poc
+nodes:
+  - role: control-plane
+    kubeadmConfigPatches:
+      - |
+        kind: InitConfiguration
+        nodeRegistration:
+          kubeletExtraArgs:
+            node-labels: "ingress-ready=true"
+    extraPortMappings:
+      # FRA HTTP
+      - containerPort: 30801
+        hostPort: 8801
+        protocol: TCP
+      # MUC HTTP
+      - containerPort: 30802
+        hostPort: 8802
+        protocol: TCP
+      # HAM HTTP
+      - containerPort: 30803
+        hostPort: 8803
+        protocol: TCP
+      # FRA native TCP
+      - containerPort: 30901
+        hostPort: 9801
+        protocol: TCP
+      # MUC native TCP
+      - containerPort: 30902
+        hostPort: 9802
+        protocol: TCP
+      # HAM native TCP
+      - containerPort: 30903
+        hostPort: 9803
+        protocol: TCP
+  - role: worker
+  - role: worker

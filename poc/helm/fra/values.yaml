@@ -1,0 +1,113 @@
+# ClickHouse Helm chart values for DC: FRA
+# Helm chart: clickhouse/clickhouse  (https://charts.clickhouse.com)
+#
+# Pod naming produced by this chart with fullnameOverride=fra, shards=1:
+#   StatefulSet: fra-shard-0
+#   Pod:         fra-shard-0-0
+#   Headless svc: fra-headless
+#   FQDN:        fra-shard-0-0.fra-headless.fra.svc.cluster.local
+
+fullnameOverride: fra
+
+replicaCount: 1
+shards: 1
+clusterName: fra_local
+
+image:
+  repository: clickhouse/clickhouse-server
+  tag: "25.3"
+  pullPolicy: IfNotPresent
+
+# Disable the chart's built-in keeper -- we deploy it externally
+keeper:
+  enabled: false
+
+auth:
+  username: default
+  password: ""
+
+service:
+  type: ClusterIP
+
+macros:
+  cluster: fra_local
+  shard: "1"
+  replica: fra-shard-0-0
+
+persistence:
+  enabled: false
+
+resources:
+  requests:
+    cpu: 500m
+    memory: 512Mi
+  limits:
+    cpu: "2"
+    memory: 2Gi
+
+# Extra XML files mounted into /etc/clickhouse-server/config.d/
+# and /etc/clickhouse-server/users.d/
+extraConfigFiles:
+  zookeeper.xml: |
+    <clickhouse>
+      <zookeeper>
+        <node>
+          <host>fra-keeper-0.fra-keeper.fra.svc.cluster.local</host>
+          <port>2181</port>
+        </node>
+      </zookeeper>
+    </clickhouse>
+
+  remote_servers.xml: |
+    <clickhouse>
+      <remote_servers replace="1">
+        <!-- Local DC cluster: single shard, single replica -->
+        <fra_local>
+          <shard>
+            <replica>
+              <host>fra-shard-0-0.fra-headless.fra.svc.cluster.local</host>
+              <port>9000</port>
+            </replica>
+          </shard>
+        </fra_local>
+
+        <!-- Cross-DC federation: FRA=shard0, MUC=shard1, HAM=shard2
+             Shard order must match the transform() mapping in dist_test_global -->
+        <federated_dcs>
+          <shard>
+            <replica>
+              <host>fra-shard-0-0.fra-headless.fra.svc.cluster.local</host>
+              <port>9000</port>
+            </replica>
+          </shard>
+          <shard>
+            <replica>
+              <host>muc-shard-0-0.muc-headless.muc.svc.cluster.local</host>
+              <port>9000</port>
+            </replica>
+          </shard>
+          <shard>
+            <replica>
+              <host>ham-shard-0-0.ham-headless.ham.svc.cluster.local</host>
+              <port>9000</port>
+            </replica>
+          </shard>
+        </federated_dcs>
+      </remote_servers>
+    </clickhouse>
+
+  listen.xml: |
+    <clickhouse>
+      <listen_host>0.0.0.0</listen_host>
+    </clickhouse>
+
+  users_network.xml: |
+    <clickhouse>
+      <users>
+        <default>
+          <networks>
+            <ip>::/0</ip>
+          </networks>
+        </default>
+      </users>
+    </clickhouse>
