@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Full POC setup: one kind cluster per DC (FRA / MUC / HAM).
+# Full demo setup: one kind cluster per DC (FRA / MUC / HAM).
 # Each cluster gets the official ClickHouse operator, a KeeperCluster, and a
 # ClickHouseCluster.  Cross-DC federation is wired via NodePort on the shared
 # kind Docker/Podman network.
@@ -93,7 +93,7 @@ apply_namespaces() {
 }
 
 # ── Step 3: Install ClickHouse operator ───────────────────────────────────────
-# Installed with webhooks disabled — no cert-manager dependency for POC.
+# Installed with webhooks disabled — no cert-manager dependency for demo.
 
 install_operator() {
     log "Installing ClickHouse operator (webhooks disabled)"
@@ -183,7 +183,7 @@ apply_schemas() {
 # ── Step 10: Print access summary ─────────────────────────────────────────────
 
 print_summary() {
-    log "POC is ready"
+    log "demo is ready"
     echo ""
     echo "  Host access (NodePort → kind control-plane → CH pod):"
     echo "    FRA  HTTP: http://localhost:8801    TCP: clickhouse-client --host localhost --port 9801"

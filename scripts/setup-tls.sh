@@ -40,7 +40,7 @@ if [ ! -f "$CERTS_DIR/ca.key" ]; then
     openssl req -new -x509 -days 3650 \
         -key "$CERTS_DIR/ca.key" \
         -out "$CERTS_DIR/ca.crt" \
-        -subj "/CN=ClickHouse-POC-CA/O=POC" 2>/dev/null
+        -subj "/CN=ClickHouse-demo-CA/O=demo" 2>/dev/null
     info "CA generated: $CERTS_DIR/ca.crt"
 else
     info "CA already exists, reusing"
@@ -71,7 +71,7 @@ distinguished_name = req_distinguished_name
 prompt             = no
 [req_distinguished_name]
 CN = ${dc}-clickhouse
-O  = POC
+O  = demo
 [v3_req]
 subjectAltName = @alt_names
 [alt_names]

@@ -30,7 +30,7 @@ ALTER ROLE app_reader SETTINGS optimize_skip_unused_shards = 1;
 -- extraUsersConfig (NOT extraConfig -- that writes to config.d/ which is
 -- ignored for profile settings; extraUsersConfig writes to users.d/):
 --   spec.settings.extraUsersConfig.profiles.default.optimize_skip_unused_shards: 1
--- This is already patched on all 3 DCs in the POC.
+-- This is already patched on all 3 DCs in the demo.
 
 -- Assign roles to actual users (adjust usernames as needed):
 -- GRANT app_writer TO ingest_user;

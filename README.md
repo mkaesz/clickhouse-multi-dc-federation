@@ -290,7 +290,7 @@ clickhouse client --host localhost --port 9803   # HAM
 ### Via clickhouse-client on the host (TLS)
 
 ```bash
-# One-time: create a client config that trusts the POC CA
+# One-time: create a client config that trusts the demo CA
 cat > /tmp/ch-tls-client.xml <<'EOF'
 <config>
     <openSSL>
@@ -482,7 +482,7 @@ The setting must be explicitly enabled; there are three ways to do it:
 >   }}}
 > }'
 > ```
-> This is already applied in the POC — all three DCs have the setting active.
+> This is already applied in the demo — all three DCs have the setting active.
 
 The role-level `ALTER ROLE` is included in `schemas/04_rbac/roles_and_grants.sql`
 and is applied automatically by `apply-schemas.sh`. The server profile approach
@@ -505,7 +505,7 @@ same data.
 **TLS for cross-DC communication**
 `scripts/setup-tls.sh` adds mutual TLS to all CH-to-CH federation traffic.
 It is called automatically by `setup.sh` (step 8) and can also be run standalone
-to retrofit TLS onto a running POC.
+to retrofit TLS onto a running demo.
 
 What it does:
 
@@ -526,7 +526,7 @@ What it does:
 Connect over TLS from the host:
 
 ```bash
-# Create a client config that trusts the POC CA (one-time)
+# Create a client config that trusts the demo CA (one-time)
 cat > /tmp/ch-tls-client.xml <<'EOF'
 <config>
     <openSSL>
@@ -550,7 +550,7 @@ clickhouse client --host 127.0.0.1 --port 9843 --secure --config-file /tmp/ch-tl
 
 `verificationMode: relaxed` is used — the client verifies the server cert
 against the CA but does not require a client cert. This is appropriate for
-an internal POC; production deployments should use `verificationMode: strict`
+an internal demo; production deployments should use `verificationMode: strict`
 with mutual TLS.
 
 > **Note:** `clickhouse client` has no `--ssl-ca-cert-file` flag. The CA must
@@ -561,7 +561,7 @@ with mutual TLS.
 **Stale Keeper digest after pod restart**
 The ClickHouse operator restarts CH pods whenever the `ClickHouseCluster` CR
 changes. Because both CH and Keeper use `emptyDir` storage (no PVCs in this
-POC), a restarted CH pod presents a fresh replica UUID to Keeper. But if only
+demo), a restarted CH pod presents a fresh replica UUID to Keeper. But if only
 the CH pod restarts (Keeper keeps running), Keeper still holds the digest from
 the previous CH instance. The operator's `DatabaseSync` then fails with
 `code: 253` ("Replica node already exists and contains unexpected value:

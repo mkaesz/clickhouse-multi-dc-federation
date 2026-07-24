@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Deletes all three kind clusters for the multi-DC federation demo.
-# Run from anywhere: bash poc/teardown.sh
+# Run from anywhere: bash demo/teardown.sh
 
 set -euo pipefail
 
