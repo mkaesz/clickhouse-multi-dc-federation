@@ -572,16 +572,53 @@ What it does:
    below) and reapplies schemas.
 
 Connect over TLS from the host:
+
+The kind `extraPortMappings` for ports 9841/9842/9843 only take effect at
+cluster creation. On an already-running cluster use `kubectl port-forward`
+instead:
+
 ```bash
-clickhouse-client --host localhost --port 9841 --secure   # FRA
-clickhouse-client --host localhost --port 9842 --secure   # MUC
-clickhouse-client --host localhost --port 9843 --secure   # HAM
+# Create a client config that trusts the POC CA (one-time)
+cat > /tmp/ch-tls-client.xml <<'EOF'
+<config>
+    <openSSL>
+        <client>
+            <caConfig>/tmp/clickhouse-tls/ca.crt</caConfig>
+            <verificationMode>relaxed</verificationMode>
+        </client>
+    </openSSL>
+</config>
+EOF
+
+# Open TLS tunnels to each DC
+kubectl port-forward --context kind-clickhouse-multi-dc-federation-demo-fra \
+  -n fra fra-clickhouse-0-0-0 19841:9440 &
+kubectl port-forward --context kind-clickhouse-multi-dc-federation-demo-muc \
+  -n muc muc-clickhouse-0-0-0 19842:9440 &
+kubectl port-forward --context kind-clickhouse-multi-dc-federation-demo-ham \
+  -n ham ham-clickhouse-0-0-0 19843:9440 &
+
+# Connect with full cert validation
+clickhouse client --host 127.0.0.1 --port 19841 --secure \
+  --config-file /tmp/ch-tls-client.xml \
+  --query "SELECT 'TLS OK', version()"
+```
+
+On a fresh cluster created by `setup.sh`, the dedicated host ports work directly:
+```bash
+clickhouse client --host localhost --port 9841 --secure \
+  --config-file /tmp/ch-tls-client.xml   # FRA
 ```
 
 `verificationMode: relaxed` is used — the client verifies the server cert
 against the CA but does not require a client cert. This is appropriate for
 an internal POC; production deployments should use `verificationMode: strict`
 with mutual TLS.
+
+> **Note:** `clickhouse client` has no `--ssl-ca-cert-file` flag. The CA must
+> be provided via `--config-file` with an `<openSSL><client><caConfig>` block,
+> or by adding the CA to the system trust store. Using `--accept-invalid-certificate`
+> bypasses validation entirely and is only appropriate for smoke tests.
 
 **Stale Keeper digest after pod restart**
 The ClickHouse operator restarts CH pods whenever the `ClickHouseCluster` CR
