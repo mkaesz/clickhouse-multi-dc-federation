@@ -45,7 +45,7 @@ fi
 patch_cr() {
     local dc="$1"
     local ctx="$2"
-    # Each DC's own shard uses localhost:9000 so ClickHouse treats it as local
+    # Each DC's own shard uses localhost:9001 so ClickHouse treats it as local
     # (ReadFromLocal instead of ReadFromRemote). Cross-DC shards use NodePorts.
     local fra_host muc_host ham_host
     # The operator sets tcp_port=9001 (not the default 9000).

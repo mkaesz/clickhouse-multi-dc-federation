@@ -32,13 +32,13 @@ crosses a DC boundary.
 │                          │   │                          │   │                          │
 │  ns: fra                 │   │  ns: muc                 │   │  ns: ham                 │
 │  ┌────────────────────┐  │   │  ┌────────────────────┐  │   │  ┌────────────────────┐  │
-│  │ fra-keeper-0       │  │   │  │ muc-keeper-0       │  │   │  │ ham-keeper-0       │  │
-│  │ (ClickHouseKeeper) │  │   │  │ (ClickHouseKeeper) │  │   │  │ (ClickHouseKeeper) │  │
+│  │ fra-keeper-0-0     │  │   │  │ muc-keeper-0-0     │  │   │  │ ham-keeper-0-0     │  │
+│  │ (KeeperCluster CR) │  │   │  │ (KeeperCluster CR) │  │   │  │ (KeeperCluster CR) │  │
 │  └────────┬───────────┘  │   │  └────────┬───────────┘  │   │  └────────┬───────────┘  │
 │           │ (Keeper)     │   │           │ (Keeper)     │   │           │ (Keeper)     │
 │  ┌────────▼───────────┐  │   │  ┌────────▼───────────┐  │   │  ┌────────▼───────────┐  │
-│  │ fra-clickhouse-0   │  │   │  │ muc-clickhouse-0   │  │   │  │ ham-clickhouse-0   │  │
-│  │ (ClickHouseCluster)│  │   │  │ (ClickHouse Helm)  │  │   │  │ (ClickHouse Helm)  │  │
+│  │ fra-clickhouse-0-0-0│ │   │  │ muc-clickhouse-0-0-0│ │   │  │ ham-clickhouse-0-0-0│ │
+│  │ (ClickHouseCluster)│  │   │  │ (ClickHouseCluster)│  │   │  │ (ClickHouseCluster)│  │
 │  └────────────────────┘  │   │  └────────────────────┘  │   │  └────────────────────┘  │
 │  NodePort 30901 (TCP)    │   │  NodePort 30902 (TCP)    │   │  NodePort 30903 (TCP)    │
 │  NodePort 30801 (HTTP)   │   │  NodePort 30802 (HTTP)   │   │  NodePort 30803 (HTTP)   │

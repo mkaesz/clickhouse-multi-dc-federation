@@ -13,8 +13,8 @@ spec:
       targetPort: 8123
       nodePort: 30802
     - name: tcp
-      port: 9000
-      targetPort: 9000
+      port: 9001
+      targetPort: 9001
       nodePort: 30902
     - name: tcp-secure
       port: 9440
