@@ -72,7 +72,7 @@ create_clusters() {
             info "Cluster '$cluster_name' already exists, skipping"
         else
             info "Creating cluster '$cluster_name'"
-            kind create cluster --config "$SCRIPT_DIR/kind-${dc}.yaml"
+            kind create cluster --config "$SCRIPT_DIR/manifests/${dc}/kind.yaml"
         fi
     done
 

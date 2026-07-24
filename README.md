@@ -111,13 +111,11 @@ Writers can never `INSERT` into `dist_test_global` — enforced by SQL `REVOKE`.
 └── poc/                                           # Local Kubernetes POC
     ├── setup.sh                                   # ← single entry point
     ├── teardown.sh
-    ├── kind-fra.yaml                              # kind cluster: clickhouse-multi-dc-federation-demo-fra
-    ├── kind-muc.yaml                              # kind cluster: clickhouse-multi-dc-federation-demo-muc
-    ├── kind-ham.yaml                              # kind cluster: clickhouse-multi-dc-federation-demo-ham
     ├── manifests/
     │   ├── fra/
+    │   │   ├── kind.yaml                          # kind cluster: clickhouse-multi-dc-federation-demo-fra
     │   │   ├── 00-namespace.yaml
-    │   │   ├── 01-keeper.yaml                     # Keeper ConfigMap + headless Service + StatefulSet
+    │   │   ├── 01-clickhouse-crs.yaml             # KeeperCluster + ClickHouseCluster CRs
     │   │   └── 02-nodeport.yaml                   # NodePort for host and cross-cluster access
     │   ├── muc/  (same)
     │   └── ham/  (same)
@@ -222,9 +220,9 @@ script so every subsequent `kind` command uses the correct backend.
 Creates one cluster per DC from the per-DC config files:
 
 ```bash
-kind create cluster --config poc/kind-fra.yaml   # clickhouse-multi-dc-federation-demo-fra
-kind create cluster --config poc/kind-muc.yaml   # clickhouse-multi-dc-federation-demo-muc
-kind create cluster --config poc/kind-ham.yaml   # clickhouse-multi-dc-federation-demo-ham
+kind create cluster --config poc/manifests/fra/kind.yaml   # clickhouse-multi-dc-federation-demo-fra
+kind create cluster --config poc/manifests/muc/kind.yaml   # clickhouse-multi-dc-federation-demo-muc
+kind create cluster --config poc/manifests/ham/kind.yaml   # clickhouse-multi-dc-federation-demo-ham
 ```
 
 Each cluster is a single-node (control-plane only, taint removed via
