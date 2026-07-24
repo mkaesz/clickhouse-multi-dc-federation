@@ -16,3 +16,8 @@ spec:
       port: 9000
       targetPort: 9000
       nodePort: 30901
+    - name: tcp-secure
+      port: 9440
+      targetPort: 9440
+      nodePort: 30941
+      protocol: TCP

@@ -54,11 +54,11 @@ with real node IPs after clusters are up.
 
 **Host port mapping:**
 
-| DC  | HTTP            | Native TCP      |
-|-----|-----------------|-----------------|
-| FRA | localhost:8801  | localhost:9801  |
-| MUC | localhost:8802  | localhost:9802  |
-| HAM | localhost:8803  | localhost:9803  |
+| DC  | HTTP            | Native TCP      | Native TCP (TLS) |
+|-----|-----------------|-----------------|------------------|
+| FRA | localhost:8801  | localhost:9801  | localhost:9841   |
+| MUC | localhost:8802  | localhost:9802  | localhost:9842   |
+| HAM | localhost:8803  | localhost:9803  | localhost:9843   |
 
 ---
 
@@ -298,7 +298,13 @@ Podman `kind` network. A pod in cluster FRA that connects to
 kindnet NAT), which then reaches the MUC node on the shared kind network.
 kube-proxy on the MUC node forwards the NodePort to the MUC CH pod.
 
-### 8. Schema deployment
+### 8. TLS setup (`setup-tls.sh`)
+Runs `poc/scripts/setup-tls.sh` which generates certs, creates K8s Secrets,
+adds the `tcp-secure` NodePorts, patches all three `ClickHouseCluster` CRs,
+and restarts pods if needed. See
+[Design notes → TLS](#tls-for-cross-dc-communication) for details.
+
+### 9. Schema deployment
 Runs `poc/scripts/apply-schemas.sh` with `--context kind-clickhouse-multi-dc-federation-demo-{dc}` on every kubectl/helm call:
 
 ```
@@ -544,7 +550,45 @@ Alternatively, run `SYSTEM FLUSH LOGS` then check `system.query_log.read_rows`
 — a pruned single-DC query reads fewer rows than an unpruned full-scan of the
 same data.
 
-**No TLS in the POC**
-Production config (`schemas/00_config_reference/`) uses `<port>9440</port>
-<secure>1</secure>`. The POC uses plain `9000` / `9001-9003` NodePorts. Do not
-use the POC config as a template for production.
+**TLS for cross-DC communication**
+`poc/scripts/setup-tls.sh` adds mutual TLS to all CH-to-CH federation traffic.
+It is called automatically by `setup.sh` (step 8) and can also be run standalone
+to retrofit TLS onto a running POC.
+
+What it does:
+
+1. Generates a self-signed CA (`/tmp/clickhouse-tls/ca.{key,crt}`).
+2. Generates a per-DC server certificate with SANs covering the pod FQDN,
+   headless-service FQDN, `localhost`, and the kind node IP.
+3. Stores certs as K8s Secrets (`clickhouse-tls`) in each DC namespace.
+4. Applies updated NodePort services that expose `tcp_port_secure: 9440` as
+   NodePort 30941/30942/30943 (host ports 9841/9842/9843).
+5. Patches each `ClickHouseCluster` CR to mount the secret and add:
+   - `tcp_port_secure: 9440` in `extraConfig`
+   - `openSSL.server` and `openSSL.client` blocks pointing at the mounted certs
+   - `remote_servers.federated_dcs` with `secure: 1` — local shard via
+     `localhost:9440`, remote shards via `<nodeIP>:3094{1,2,3}`
+6. Handles stale Keeper state after pod restart (see "Stale Keeper digest" note
+   below) and reapplies schemas.
+
+Connect over TLS from the host:
+```bash
+clickhouse-client --host localhost --port 9841 --secure   # FRA
+clickhouse-client --host localhost --port 9842 --secure   # MUC
+clickhouse-client --host localhost --port 9843 --secure   # HAM
+```
+
+`verificationMode: relaxed` is used — the client verifies the server cert
+against the CA but does not require a client cert. This is appropriate for
+an internal POC; production deployments should use `verificationMode: strict`
+with mutual TLS.
+
+**Stale Keeper digest after pod restart**
+The ClickHouse operator restarts CH pods whenever the `ClickHouseCluster` CR
+changes. Because both CH and Keeper use `emptyDir` storage (no PVCs in this
+POC), a restarted CH pod presents a fresh replica UUID to Keeper. But if only
+the CH pod restarts (Keeper keeps running), Keeper still holds the digest from
+the previous CH instance. The operator's `DatabaseSync` then fails with
+`code: 253` ("Replica node already exists and contains unexpected value:
+digest"). Fix: restart both Keeper and CH pods together — `setup-tls.sh`
+handles this automatically after the TLS patch.

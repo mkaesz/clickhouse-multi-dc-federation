@@ -10,3 +10,6 @@ nodes:
       - containerPort: 30903
         hostPort: 9803
         protocol: TCP
+      - containerPort: 30943
+        hostPort: 9843
+        protocol: TCP

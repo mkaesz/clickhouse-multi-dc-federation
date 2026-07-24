@@ -166,14 +166,21 @@ patch_federation() {
     bash "$SCRIPT_DIR/scripts/patch-federation.sh"
 }
 
-# ── Step 8: Apply schemas ──────────────────────────────────────────────────────
+# ── Step 8: Set up TLS (certs, secrets, NodePorts, CR patches) ────────────────
+
+setup_tls() {
+    log "Setting up TLS for cross-DC communication"
+    bash "$SCRIPT_DIR/scripts/setup-tls.sh"
+}
+
+# ── Step 9: Apply schemas ──────────────────────────────────────────────────────
 
 apply_schemas() {
     log "Applying ClickHouse schemas (Tier 1 → 2 → 3 → RBAC)"
     bash "$SCRIPT_DIR/scripts/apply-schemas.sh"
 }
 
-# ── Step 9: Print access summary ──────────────────────────────────────────────
+# ── Step 10: Print access summary ─────────────────────────────────────────────
 
 print_summary() {
     log "POC is ready"
@@ -182,6 +189,11 @@ print_summary() {
     echo "    FRA  HTTP: http://localhost:8801    TCP: clickhouse-client --host localhost --port 9801"
     echo "    MUC  HTTP: http://localhost:8802    TCP: clickhouse-client --host localhost --port 9802"
     echo "    HAM  HTTP: http://localhost:8803    TCP: clickhouse-client --host localhost --port 9803"
+    echo ""
+    echo "  Host access (TLS):"
+    echo "    FRA  clickhouse-client --host localhost --port 9841 --secure"
+    echo "    MUC  clickhouse-client --host localhost --port 9842 --secure"
+    echo "    HAM  clickhouse-client --host localhost --port 9843 --secure"
     echo ""
     echo "  Cross-DC query (run from FRA):"
     echo "    clickhouse-client --host localhost --port 9801 \\"
@@ -207,5 +219,6 @@ deploy_clickhouse_clusters
 wait_for_keeper
 wait_for_clickhouse
 patch_federation
+setup_tls
 apply_schemas
 print_summary
