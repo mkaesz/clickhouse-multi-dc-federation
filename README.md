@@ -19,6 +19,7 @@ crosses a DC boundary.
 8. [Running queries](#running-queries)
 9. [Teardown](#teardown)
 10. [Design notes](#design-notes)
+    - [Shard pruning and optimize_skip_unused_shards](#shard-pruning-and-optimize_skip_unused_shards)
 
 ---
 
@@ -413,12 +414,26 @@ ORDER BY ALL ASC
 SETTINGS optimize_skip_unused_shards = 1;
 ```
 
-**Confirm shard pruning via EXPLAIN:**
+> **`optimize_skip_unused_shards` must be explicit.**
+> Without this setting every query fans out to all three DC shards regardless
+> of the WHERE clause. Add it to individual queries, or set it once as a
+> per-user default so application code never needs to carry it:
+> ```sql
+> ALTER USER default SETTINGS optimize_skip_unused_shards = 1;
+> ```
+> See [Design notes → Shard pruning](#shard-pruning-and-optimize_skip_unused_shards)
+> for the full explanation and all three configuration options.
+
+**Confirm shard pruning via EXPLAIN PIPELINE (not EXPLAIN):**
 ```sql
-EXPLAIN SELECT * FROM default.dist_test_global
+-- EXPLAIN PIPELINE shows the actual execution path; EXPLAIN shows the logical
+-- plan which looks identical with or without pruning.
+EXPLAIN PIPELINE SELECT * FROM default.dist_test_global
 WHERE dc_name = 'HAM'
 SETTINGS optimize_skip_unused_shards = 1;
--- Expected: 1 shard referenced, not 3
+-- FRA (local): ReadFromMergeTree  → local read, zero network hop
+-- MUC/HAM:     ReadFromRemote     → goes to the matching DC's NodePort
+-- With dc_name = 'HAM' + pruning: only ReadFromRemote (FRA and MUC not contacted)
 ```
 
 **Verify RBAC (should fail with Code 497):**
@@ -485,6 +500,49 @@ transform(dc_name, ['FRA', 'MUC', 'HAM'], [0, 1, 2], 0)
 The shard order must match `federated_dcs` in `remote_servers.xml`
 (FRA=shard 0, MUC=shard 1, HAM=shard 2). Unknown `dc_name` values fall back
 to shard 0 (FRA).
+
+**Shard pruning and `optimize_skip_unused_shards`**
+Without this setting ClickHouse fans out every `dist_test_global` query to all
+three DC shards and applies the WHERE filter only after receiving results.
+The setting must be explicitly enabled; there are three ways to do it:
+
+| Option | How | Scope |
+|--------|-----|-------|
+| Per-query | `SETTINGS optimize_skip_unused_shards = 1` at end of SQL | Single query |
+| Per-role/user | `ALTER ROLE app_reader SETTINGS optimize_skip_unused_shards = 1` | All queries from users with that role |
+| Server profile | Add to **`extraUsersConfig`** in the ClickHouseCluster CR (see below) | All users on that profile |
+
+> **Note on the built-in `default` user:** this user is defined in the
+> read-only `users_xml` config and cannot be altered via SQL (`ALTER USER`
+> returns `ACCESS_STORAGE_READONLY`). Use the server profile approach instead.
+> Profile settings must go in **`extraUsersConfig`** (writes to `users.d/`),
+> not `extraConfig` (which writes to `config.d/` and is ignored for profiles):
+> ```bash
+> kubectl patch clickhousecluster fra -n fra --type merge --patch '{
+>   "spec": {"settings": {"extraUsersConfig": {
+>     "profiles": {"default": {"optimize_skip_unused_shards": 1}}
+>   }}}
+> }'
+> ```
+> This is already applied in the POC — all three DCs have the setting active.
+
+The role-level `ALTER ROLE` is included in `schemas/04_rbac/roles_and_grants.sql`
+and is applied automatically by `apply-schemas.sh`. The server profile approach
+is preferred for production because it applies uniformly to all users without
+relying on role assignment.
+
+Pruning only activates for **direct equality or IN predicates on the sharding
+column** (`dc_name` here). `!=`, range comparisons, and expressions on the
+column do not prune — all shards are contacted even with the setting on.
+
+To verify pruning is working, use `EXPLAIN PIPELINE` (not `EXPLAIN`):
+`EXPLAIN` shows the logical plan before execution-time optimisation and looks
+identical regardless of the setting. `EXPLAIN PIPELINE` shows the physical
+plan: a pruned local query shows `ReadFromMergeTree`; a pruned remote-only
+query shows `ReadFromRemote`; an unpruned query shows `Union` of both.
+Alternatively, run `SYSTEM FLUSH LOGS` then check `system.query_log.read_rows`
+— a pruned single-DC query reads fewer rows than an unpruned full-scan of the
+same data.
 
 **No TLS in the POC**
 Production config (`schemas/00_config_reference/`) uses `<port>9440</port>

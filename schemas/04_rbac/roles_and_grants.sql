@@ -18,6 +18,20 @@ GRANT SELECT ON default.dist_test_regional TO app_reader;
 -- even if a future grant is added by mistake.
 REVOKE INSERT ON default.dist_test_global FROM app_writer, app_reader;
 
+-- Shard pruning: enable optimize_skip_unused_shards by default for all roles
+-- so application queries don't need to carry the SETTINGS clause.
+-- Without this, every dist_test_global query fans out to all 3 DC shards
+-- regardless of the WHERE clause.
+ALTER ROLE app_writer SETTINGS optimize_skip_unused_shards = 1;
+ALTER ROLE app_reader SETTINGS optimize_skip_unused_shards = 1;
+-- NOTE: the built-in 'default' user is defined in the read-only users_xml
+-- config and cannot be altered via SQL (returns ACCESS_STORAGE_READONLY).
+-- Set optimize_skip_unused_shards for it via the ClickHouseCluster CR's
+-- extraUsersConfig (NOT extraConfig -- that writes to config.d/ which is
+-- ignored for profile settings; extraUsersConfig writes to users.d/):
+--   spec.settings.extraUsersConfig.profiles.default.optimize_skip_unused_shards: 1
+-- This is already patched on all 3 DCs in the POC.
+
 -- Assign roles to actual users (adjust usernames as needed):
 -- GRANT app_writer TO ingest_user;
 -- GRANT app_reader TO bi_user;

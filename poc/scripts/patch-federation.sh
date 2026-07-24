@@ -45,10 +45,20 @@ fi
 patch_cr() {
     local dc="$1"
     local ctx="$2"
+    # Each DC's own shard uses localhost:9000 so ClickHouse treats it as local
+    # (ReadFromLocal instead of ReadFromRemote). Cross-DC shards use NodePorts.
+    local fra_host muc_host ham_host
+    # The operator sets tcp_port=9001 (not the default 9000).
+    # ClickHouse marks a shard is_local=1 only when host=localhost AND port=tcp_port.
+    local fra_port=30901 muc_port=30902 ham_port=30903
+    case "$dc" in
+        fra) fra_host="localhost"; fra_port=9001; muc_host="$MUC_IP"; ham_host="$HAM_IP" ;;
+        muc) fra_host="$FRA_IP";  muc_host="localhost"; muc_port=9001; ham_host="$HAM_IP" ;;
+        ham) fra_host="$FRA_IP";  muc_host="$MUC_IP"; ham_host="localhost"; ham_port=9001 ;;
+    esac
 
-    info "Patching ClickHouseCluster/$dc in $ctx"
+    info "Patching ClickHouseCluster/$dc in $ctx (local shard → localhost:9001)"
 
-    # Build JSON patch (raw JSON written verbatim to 99-extra-config.yaml)
     local patch
     patch=$(cat <<JSON
 {
@@ -58,9 +68,9 @@ patch_cr() {
         "remote_servers": {
           "federated_dcs": {
             "shard": [
-              {"replica": {"host": "${FRA_IP}", "port": 30901}},
-              {"replica": {"host": "${MUC_IP}", "port": 30902}},
-              {"replica": {"host": "${HAM_IP}", "port": 30903}}
+              {"replica": {"host": "${fra_host}", "port": ${fra_port}}},
+              {"replica": {"host": "${muc_host}", "port": ${muc_port}}},
+              {"replica": {"host": "${ham_host}", "port": ${ham_port}}}
             ]
           }
         }
@@ -134,6 +144,6 @@ reload_config ham "$HAM_CTX"
 
 echo ""
 echo "=== Federation patch complete ==="
-echo "   FRA → $FRA_IP:30901"
-echo "   MUC → $MUC_IP:30902"
-echo "   HAM → $HAM_IP:30903"
+echo "   FRA shard: localhost:9001 (local)  |  MUC via $MUC_IP:30902  |  HAM via $HAM_IP:30903"
+echo "   MUC shard: localhost:9001 (local)  |  FRA via $FRA_IP:30901  |  HAM via $HAM_IP:30903"
+echo "   HAM shard: localhost:9001 (local)  |  FRA via $FRA_IP:30901  |  MUC via $MUC_IP:30902"

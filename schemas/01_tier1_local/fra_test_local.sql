@@ -3,7 +3,7 @@
 -- The operator creates 'default' as a Replicated database, so ReplicatedMergeTree
 -- must be used without explicit ZooKeeper paths (the database handles them).
 
-CREATE TABLE default.test_local ON CLUSTER 'default'
+CREATE TABLE IF NOT EXISTS default.test_local ON CLUSTER 'default'
 (
     id         UInt64,
     event_time DateTime,

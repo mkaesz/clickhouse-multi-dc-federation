@@ -45,12 +45,14 @@ VALUES (1005, now(), 'direct local insert', 'FRA');
 INSERT INTO default.test_local (id, event_time, payload, dc_name)
 VALUES (1006, now(), 'relabeled row', 'HAM');
 
--- 1.5 THIS WILL FAIL (by design) -- app_writer has no INSERT grant on the
---     global table, and app_reader has no INSERT grant anywhere:
+-- 1.5 THIS WILL FAIL when run as a role-restricted user (app_writer /
+--     app_reader have no INSERT grant on the global table). Connect as such
+--     a user first:  clickhouse-client --user rbac_test_user
+--     Running as the default admin user will succeed (it has full access).
 
 INSERT INTO default.dist_test_global (id, event_time, payload, dc_name)
 VALUES (9999, now(), 'should be rejected', 'FRA');
--- Expected: Code: 497. DB::Exception: <user>: Not enough privileges...
+-- Expected (as rbac_test_user): Code: 497. DB::Exception: Not enough privileges...
 
 
 --------------------------------------------------------------------------------
@@ -120,13 +122,14 @@ ORDER BY ALL ASC
 SETTINGS optimize_skip_unused_shards = 1;
 
 -- 3.5 Exclude a DC (e.g. everything except FRA):
+--     NOTE: optimize_skip_unused_shards does NOT prune for != predicates --
+--     all 3 shards are always scanned. Use IN() if you need pruning.
 
 SELECT *
 FROM default.dist_test_global
 WHERE dc_name != 'FRA'
 ORDER BY event_time DESC
-LIMIT 100
-SETTINGS optimize_skip_unused_shards = 1;
+LIMIT 100;
 
 -- 3.6 Aggregate comparison across DCs:
 
@@ -144,38 +147,200 @@ ORDER BY dc_name;
  4. VERIFYING SHARD PRUNING (diagnostic, not application queries)
 --------------------------------------------------------------------------------
 
--- 4.1 Confirm a single-DC filter only touches 1 shard:
+-- NOTE: EXPLAIN does NOT show pruning. It outputs a fixed 3-line logical plan
+-- (output columns / blank / ReadFromRemote) regardless of WHERE clause or the
+-- optimize_skip_unused_shards setting -- "3 rows in set" refers to those 3
+-- plan-text rows, not data rows. Pruning is an execution-time optimisation and
+-- is invisible to EXPLAIN.  Use system.query_log.read_rows instead.
 
-EXPLAIN SELECT * FROM default.dist_test_global
+-- NOTE: query_log is written asynchronously. Always run SYSTEM FLUSH LOGS
+--       immediately before reading system.query_log to get current results.
+
+-- 4.1 Single-DC pruned query: only HAM shard is contacted.
+--     read_rows = rows returned FROM HAM shard (FRA and MUC not contacted):
+
+SELECT * FROM default.dist_test_global
 WHERE dc_name = 'HAM'
 SETTINGS optimize_skip_unused_shards = 1;
 
--- 4.2 Confirm an IN(...) filter only touches the matching shards:
+SYSTEM FLUSH LOGS;
 
-EXPLAIN SELECT * FROM default.dist_test_global
+SELECT read_rows, query
+FROM system.query_log
+WHERE query LIKE '%dist_test_global%'
+  AND type = 'QueryFinish'
+  AND event_time >= now() - toIntervalMinute(2)
+ORDER BY event_time DESC
+LIMIT 1;
+
+-- 4.2 IN() filter -- only matching shards are contacted (MUC skipped).
+--     read_rows = rows returned from FRA shard + rows from HAM shard:
+
+SELECT dc_name, count() FROM default.dist_test_global
 WHERE dc_name IN ('FRA', 'HAM')
+GROUP BY dc_name
 SETTINGS optimize_skip_unused_shards = 1;
 
--- 4.3 Without the setting, all 3 shards are always queried (correct result,
---     but no pruning -- useful to compare against 4.1/4.2):
+SYSTEM FLUSH LOGS;
 
-EXPLAIN SELECT * FROM default.dist_test_global
-WHERE dc_name = 'HAM';
+SELECT read_rows, query
+FROM system.query_log
+WHERE query LIKE '%dist_test_global%'
+  AND type = 'QueryFinish'
+  AND event_time >= now() - toIntervalMinute(2)
+ORDER BY event_time DESC
+LIMIT 1;
+-- read_rows here is 1 more than 4.1 (FRA contributes its matching rows too)
+-- MUC's read_rows contribution = 0 because it was not contacted
+
+-- 4.3 Without pruning -- all 3 shards always contacted.
+--     Use the IN() variant so the result set differs from 4.1 (makes
+--     the pruning vs. no-pruning read_rows comparison unambiguous):
+
+SELECT dc_name, count() FROM default.dist_test_global
+WHERE dc_name IN ('FRA', 'HAM')
+GROUP BY dc_name;
+
+SYSTEM FLUSH LOGS;
+
+SELECT read_rows, query
+FROM system.query_log
+WHERE query LIKE '%dist_test_global%'
+  AND type = 'QueryFinish'
+  AND event_time >= now() - toIntervalMinute(2)
+ORDER BY event_time DESC
+LIMIT 1;
+-- read_rows > 4.2 because MUC shard was also contacted (returned 0 matching rows
+-- but still scanned its local table and returned to the initiator)
+
+-- 4.4 Side-by-side comparison of recent queries (run 4.1–4.3 first):
+
+SYSTEM FLUSH LOGS;
+
+SELECT read_rows, left(query, 120) AS q
+FROM system.query_log
+WHERE query LIKE '%dist_test_global%dc_name%'
+  AND type = 'QueryFinish'
+  AND event_time >= now() - toIntervalMinute(5)
+ORDER BY event_time DESC
+LIMIT 5;
 
 
 --------------------------------------------------------------------------------
- 5. NOTES
+ 5. CLUSTER TOPOLOGY (diagnostic)
+--------------------------------------------------------------------------------
+
+-- 5.1 All configured clusters visible to this node (local + federated):
+--     DISTINCT is required: the Replicated database engine registers the
+--     'default' cluster independently, causing duplicate rows without it.
+
+SELECT DISTINCT
+    cluster,
+    shard_num,
+    replica_num,
+    host_name,
+    port,
+    is_local
+FROM system.clusters
+ORDER BY cluster, shard_num, replica_num;
+
+-- 5.2 Local intra-DC cluster only ('default' = operator-managed single shard):
+
+SELECT DISTINCT
+    shard_num,
+    replica_num,
+    host_name,
+    port,
+    is_local
+FROM system.clusters
+WHERE cluster = 'default'
+ORDER BY shard_num, replica_num;
+
+-- 5.3 Cross-DC federated cluster -- shows the 3 remote NodePort endpoints
+--     injected by patch-federation.sh:
+
+SELECT
+    shard_num,
+    replica_num,
+    host_name,
+    port,
+    is_local,
+    errors_count,
+    estimated_recovery_time
+FROM system.clusters
+WHERE cluster = 'federated_dcs'
+ORDER BY shard_num, replica_num;
+-- Expected: 3 shards, shard 1=FRA, 2=MUC, 3=HAM  (ClickHouse is 1-based)
+-- is_local=0 for all three -- NodePort IPs never match the local FQDN so
+--   ClickHouse always treats them as remote, even for the local DC's own shard
+-- errors_count > 0 means the remote is unreachable
+
+-- 5.4 Active connection pool state per remote shard
+--     (shows whether connections are established and healthy):
+
+SELECT
+    cluster,
+    shard_num,
+    host_name,
+    port,
+    errors_count,
+    slowdowns_count,
+    estimated_recovery_time
+FROM system.clusters
+WHERE cluster = 'federated_dcs'
+ORDER BY shard_num;
+
+-- 5.5 Macro substitutions active on this node (cluster/shard/replica identity):
+
+SELECT macro, substitution
+FROM system.macros
+ORDER BY macro;
+-- Note: the 'shard' and 'replica' macros are 0-based (0, 1, 2 ...) while
+-- system.clusters.shard_num is 1-based. They refer to the same shards.
+
+-- 5.6 Database engines -- shows what engine each database uses
+--     (the 'default' database uses a Replicated engine managed by the operator):
+
+SELECT
+    name,
+    engine,
+    engine_full
+FROM system.databases
+WHERE name NOT IN ('system', 'information_schema', 'INFORMATION_SCHEMA')
+ORDER BY name;
+
+-- 5.7 ReplicatedMergeTree replica health for all local tables:
+
+SELECT
+    database,
+    table,
+    replica_name,
+    is_leader,
+    is_readonly,
+    total_replicas,
+    active_replicas,
+    queue_size,
+    inserts_in_queue,
+    merges_in_queue
+FROM system.replicas
+ORDER BY database, table;
+-- queue_size > 0 means replication lag; is_readonly=1 means Keeper is unreachable
+
+
+--------------------------------------------------------------------------------
+ 6. NOTES
 --------------------------------------------------------------------------------
 
 - Always insert via dist_test_regional (Tier 2), never dist_test_global
   (Tier 3) -- this is enforced by RBAC (see 04_rbac/roles_and_grants.sql
-  in the schema package), not just convention.
+  in the schema package), not just convention. See section 5 for topology
+  queries that confirm which cluster/shard a node belongs to.
 
 - optimize_skip_unused_shards only prunes reliably for equality / IN
   predicates directly on the sharding expression's input column (dc_name
   here). More complex WHERE clauses may not prune even if they're logically
-  equivalent -- always check with EXPLAIN if pruning correctness matters for
-  a given query shape.
+  equivalent -- verify with system.query_log.read_rows (see section 4), not
+  EXPLAIN (EXPLAIN does not reflect execution-time pruning).
 
 - Any dc_name value outside 'FRA' / 'MUC' / 'HAM' falls back to shard 0
   (FRA) per the transform() default in the Tier 3 table definition.

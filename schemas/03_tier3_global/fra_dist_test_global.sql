@@ -2,7 +2,7 @@
 -- Requires test_local to already exist in FRA, MUC, and HAM, and requires the
 -- federated_dcs remote_servers definition (3 shards: FRA/MUC/HAM) to be present.
 
-CREATE TABLE default.dist_test_global ON CLUSTER 'default'
+CREATE TABLE IF NOT EXISTS default.dist_test_global ON CLUSTER 'default'
 AS default.test_local
 ENGINE = Distributed(
     'federated_dcs',
