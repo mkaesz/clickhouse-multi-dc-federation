@@ -1,0 +1,7 @@
+-- Tier 2: Regional distributed table (fan-out across shards inside MUC)
+-- Currently a no-op since MUC is a single shard today; exists so MUC can grow
+-- to multiple shards later without any application-level query changes.
+
+CREATE TABLE default.dist_test_regional ON CLUSTER 'muc_local'
+AS default.test_local
+ENGINE = Distributed('muc_local', default, test_local, rand());

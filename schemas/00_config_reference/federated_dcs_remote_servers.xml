@@ -1,0 +1,28 @@
+<!--
+  Reference only -- this is infrastructure config, not SQL DDL.
+  Deploy identically to config.d/ on every node in FRA, MUC, and HAM
+  (e.g. via ConfigMap + volume mount on the official ClickHouse operator's
+  ClickHouseCluster podTemplate/containerTemplate).
+
+  Shard order matters: it must match the transform() mapping used in the
+  Tier 3 (dist_test_global) table definitions --
+    shard 0 = FRA, shard 1 = MUC, shard 2 = HAM.
+-->
+<clickhouse>
+  <remote_servers>
+    <federated_dcs>
+      <shard>
+        <replica><host>fra-ch-0.fra.example.com</host><port>9440</port><secure>1</secure></replica>
+        <replica><host>fra-ch-1.fra.example.com</host><port>9440</port><secure>1</secure></replica>
+      </shard>
+      <shard>
+        <replica><host>muc-ch-0.muc.example.com</host><port>9440</port><secure>1</secure></replica>
+        <replica><host>muc-ch-1.muc.example.com</host><port>9440</port><secure>1</secure></replica>
+      </shard>
+      <shard>
+        <replica><host>ham-ch-0.ham.example.com</host><port>9440</port><secure>1</secure></replica>
+        <replica><host>ham-ch-1.ham.example.com</host><port>9440</port><secure>1</secure></replica>
+      </shard>
+    </federated_dcs>
+  </remote_servers>
+</clickhouse>
