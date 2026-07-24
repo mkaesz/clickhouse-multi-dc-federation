@@ -89,8 +89,6 @@ Writers can never `INSERT` into `dist_test_global` — enforced by SQL `REVOKE`.
 ```
 .
 ├── schemas/
-│   ├── 00_config_reference/
-│   │   └── federated_dcs_remote_servers.xml   # Reference XML (production FQDNs)
 │   ├── 01_tier1_local/
 │   │   ├── fra_test_local.sql
 │   │   ├── muc_test_local.sql
@@ -111,6 +109,7 @@ Writers can never `INSERT` into `dist_test_global` — enforced by SQL `REVOKE`.
 ├── setup.sh                                       # ← single entry point
 ├── teardown.sh
 ├── manifests/
+│   ├── federated_dcs_remote_servers.xml           # Reference config (production FQDNs)
 │   ├── fra/
 │   │   ├── kind.yaml                              # kind cluster: clickhouse-multi-dc-federation-demo-fra
 │   │   ├── 00-namespace.yaml
