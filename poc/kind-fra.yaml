@@ -1,0 +1,17 @@
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: clickhouse-multi-dc-federation-demo-fra
+nodes:
+  - role: control-plane
+    kubeadmConfigPatches:
+      - |
+        kind: InitConfiguration
+        nodeRegistration:
+          taints: []
+    extraPortMappings:
+      - containerPort: 30801
+        hostPort: 8801
+        protocol: TCP
+      - containerPort: 30901
+        hostPort: 9801
+        protocol: TCP

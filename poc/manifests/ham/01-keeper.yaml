@@ -7,6 +7,7 @@ metadata:
 data:
   keeper_config.xml: |
     <clickhouse>
+      <listen_host>0.0.0.0</listen_host>
       <keeper_server>
         <tcp_port>2181</tcp_port>
         <server_id>1</server_id>
@@ -20,7 +21,7 @@ data:
         <raft_configuration>
           <server>
             <id>1</id>
-            <hostname>ham-keeper-0.ham-keeper.ham.svc.cluster.local</hostname>
+            <hostname>localhost</hostname>
             <port>9234</port>
           </server>
         </raft_configuration>
@@ -68,7 +69,9 @@ spec:
     spec:
       containers:
         - name: keeper
-          image: clickhouse/clickhouse-keeper:25.3
+          image: clickhouse/clickhouse-keeper:latest
+          args:
+            - --config-file=/etc/clickhouse-keeper/keeper_config.xml
           ports:
             - containerPort: 2181
               name: client
@@ -80,6 +83,11 @@ spec:
               subPath: keeper_config.xml
             - name: data
               mountPath: /var/lib/clickhouse-keeper
+          startupProbe:
+            tcpSocket:
+              port: 2181
+            failureThreshold: 60
+            periodSeconds: 5
           readinessProbe:
             tcpSocket:
               port: 2181
@@ -88,7 +96,7 @@ spec:
           livenessProbe:
             tcpSocket:
               port: 2181
-            initialDelaySeconds: 15
+            initialDelaySeconds: 30
             periodSeconds: 10
       volumes:
         - name: config

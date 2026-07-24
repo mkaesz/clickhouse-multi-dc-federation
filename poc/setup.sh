@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
-# Full POC setup: kind cluster + external Keepers + ClickHouse (Helm) for FRA/MUC/HAM.
+# Full POC setup: one kind cluster per DC (FRA / MUC / HAM).
+# Each cluster gets its own external Keeper + ClickHouse (via Helm).
+# Cross-DC federation is wired via NodePort on the shared kind network.
+#
 # Run from the repo root:  bash poc/setup.sh
 #
 # Prerequisites: kind, kubectl, helm, docker OR podman
@@ -10,13 +13,15 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MANIFESTS="$SCRIPT_DIR/manifests"
 HELM_VALUES="$SCRIPT_DIR/helm"
 
+FRA_CTX="kind-clickhouse-multi-dc-federation-demo-fra"
+MUC_CTX="kind-clickhouse-multi-dc-federation-demo-muc"
+HAM_CTX="kind-clickhouse-multi-dc-federation-demo-ham"
+
 # ── helpers ────────────────────────────────────────────────────────────────────
 
 log()  { echo ""; echo "▶  $*"; }
 info() { echo "   $*"; }
 
-# Detect container runtime and export KIND_EXPERIMENTAL_PROVIDER when using
-# Podman. Must be called before any `kind` command.
 detect_runtime() {
     if command -v docker &>/dev/null && docker info &>/dev/null 2>&1; then
         CONTAINER_RUNTIME=docker
@@ -52,41 +57,48 @@ wait_for_pods() {
     bash "$SCRIPT_DIR/scripts/wait-for-pods.sh" "$@"
 }
 
-# ── Step 1: kind cluster ───────────────────────────────────────────────────────
+# ── Step 1: Create 3 kind clusters ────────────────────────────────────────────
 
-create_cluster() {
-    log "Creating kind cluster 'geo-poc'"
-    if kind get clusters 2>/dev/null | grep -q "^geo-poc$"; then
-        info "Cluster 'geo-poc' already exists, skipping"
-    else
-        kind create cluster --config "$SCRIPT_DIR/kind-config.yaml"
-        info "Cluster created"
-    fi
-    kubectl cluster-info --context kind-geo-poc
-}
-
-# ── Step 2: namespaces ─────────────────────────────────────────────────────────
-
-apply_namespaces() {
-    log "Creating namespaces: fra, muc, ham"
+create_clusters() {
+    log "Creating kind clusters (one per DC)"
     for dc in fra muc ham; do
-        kubectl apply -f "$MANIFESTS/$dc/00-namespace.yaml"
+        local cluster_name="clickhouse-multi-dc-federation-demo-${dc}"
+        if kind get clusters 2>/dev/null | grep -q "^${cluster_name}$"; then
+            info "Cluster '$cluster_name' already exists, skipping"
+        else
+            info "Creating cluster '$cluster_name'"
+            kind create cluster --config "$SCRIPT_DIR/kind-${dc}.yaml"
+        fi
+    done
+
+    info "Cluster contexts:"
+    for dc in fra muc ham; do
+        kubectl cluster-info --context "kind-clickhouse-multi-dc-federation-demo-${dc}" 2>/dev/null \
+            | head -1 | sed 's/^/    /'
     done
 }
 
-# ── Step 3: external Keepers ───────────────────────────────────────────────────
+# ── Step 2: Namespaces ─────────────────────────────────────────────────────────
+
+apply_namespaces() {
+    log "Creating namespaces"
+    kubectl apply --context "$FRA_CTX" -f "$MANIFESTS/fra/00-namespace.yaml"
+    kubectl apply --context "$MUC_CTX" -f "$MANIFESTS/muc/00-namespace.yaml"
+    kubectl apply --context "$HAM_CTX" -f "$MANIFESTS/ham/00-namespace.yaml"
+}
+
+# ── Step 3: External Keepers ───────────────────────────────────────────────────
 
 deploy_keepers() {
     log "Deploying external ClickHouse Keepers"
-    for dc in fra muc ham; do
-        info "Applying $dc keeper"
-        kubectl apply -f "$MANIFESTS/$dc/01-keeper.yaml"
-    done
+    kubectl apply --context "$FRA_CTX" -f "$MANIFESTS/fra/01-keeper.yaml"
+    kubectl apply --context "$MUC_CTX" -f "$MANIFESTS/muc/01-keeper.yaml"
+    kubectl apply --context "$HAM_CTX" -f "$MANIFESTS/ham/01-keeper.yaml"
 
     log "Waiting for Keepers to be Ready"
-    for dc in fra muc ham; do
-        wait_for_pods "$dc" "app=${dc}-keeper" 1
-    done
+    wait_for_pods "$FRA_CTX" fra "app=fra-keeper" 1
+    wait_for_pods "$MUC_CTX" muc "app=muc-keeper" 1
+    wait_for_pods "$HAM_CTX" ham "app=ham-keeper" 1
 }
 
 # ── Step 4: ClickHouse via Helm ────────────────────────────────────────────────
@@ -96,17 +108,20 @@ deploy_clickhouse() {
     helm repo add clickhouse https://charts.clickhouse.com 2>/dev/null || true
     helm repo update clickhouse
 
-    log "Installing ClickHouse clusters via Helm"
+    log "Installing ClickHouse on each cluster"
     for dc in fra muc ham; do
-        if helm status "$dc" -n "$dc" &>/dev/null; then
-            info "Helm release '$dc' already exists in ns $dc, upgrading"
+        local ctx="kind-clickhouse-multi-dc-federation-demo-${dc}"
+        if helm status "$dc" --kube-context "$ctx" -n "$dc" &>/dev/null; then
+            info "Release '$dc' already exists in ns=$dc ctx=$ctx, upgrading"
             helm upgrade "$dc" clickhouse/clickhouse \
+                --kube-context "$ctx" \
                 --namespace "$dc" \
                 --values "$HELM_VALUES/$dc/values.yaml" \
                 --wait --timeout 5m
         else
-            info "Installing Helm release '$dc' in ns $dc"
+            info "Installing release '$dc' in ns=$dc ctx=$ctx"
             helm install "$dc" clickhouse/clickhouse \
+                --kube-context "$ctx" \
                 --namespace "$dc" \
                 --values "$HELM_VALUES/$dc/values.yaml" \
                 --wait --timeout 5m
@@ -114,80 +129,86 @@ deploy_clickhouse() {
     done
 
     log "Applying NodePort services for host access"
-    for dc in fra muc ham; do
-        kubectl apply -f "$MANIFESTS/$dc/02-nodeport.yaml"
-    done
+    kubectl apply --context "$FRA_CTX" -f "$MANIFESTS/fra/02-nodeport.yaml"
+    kubectl apply --context "$MUC_CTX" -f "$MANIFESTS/muc/02-nodeport.yaml"
+    kubectl apply --context "$HAM_CTX" -f "$MANIFESTS/ham/02-nodeport.yaml"
 }
 
-# ── Step 5: verify actual pod naming ──────────────────────────────────────────
-# The Helm chart's StatefulSet naming may differ from what we assumed in
-# remote_servers.xml (fra-shard-0-0.fra-headless.fra.svc.cluster.local).
-# This step prints the actual FQDNs so you can patch values.yaml if needed.
+# ── Step 5: Verify pod naming ──────────────────────────────────────────────────
 
 verify_naming() {
-    log "Actual CH pod/service names (verify against remote_servers.xml in values.yaml)"
+    log "Actual CH pod/service names per cluster"
     for dc in fra muc ham; do
-        info "--- $dc ---"
-        kubectl get pods -n "$dc" -l "app.kubernetes.io/name=clickhouse" \
+        local ctx="kind-clickhouse-multi-dc-federation-demo-${dc}"
+        info "--- $dc ($ctx) ---"
+        kubectl get pods --context "$ctx" -n "$dc" \
+            -l "app.kubernetes.io/name=clickhouse" \
             -o custom-columns="NAME:.metadata.name,STATUS:.status.phase" 2>/dev/null || true
-        kubectl get svc -n "$dc" 2>/dev/null | grep -v "keeper" | grep -v "nodeport" || true
+        kubectl get svc --context "$ctx" -n "$dc" 2>/dev/null \
+            | grep -v "keeper" | grep -v "nodeport" || true
     done
-
     echo ""
-    info "If the headless service or pod names differ from 'fra-shard-0-0.fra-headless.fra.svc.cluster.local',"
-    info "update poc/helm/{dc}/values.yaml remote_servers.xml and re-run:"
-    info "  helm upgrade fra clickhouse/clickhouse -n fra -f poc/helm/fra/values.yaml --wait"
-    info "  kubectl exec -n fra \$(kubectl get pod -n fra -l app.kubernetes.io/name=clickhouse -o name | head -1) -- clickhouse-client --query 'SYSTEM RELOAD CONFIG'"
+    info "Expected headless service: {dc}-headless  |  pod: {dc}-shard-0-0"
+    info "If names differ, update extraConfigFiles.remote_servers.xml in poc/helm/{dc}/values.yaml"
+    info "then re-run: helm upgrade {dc} clickhouse/clickhouse --kube-context kind-clickhouse-multi-dc-federation-demo-{dc} --reuse-values --wait -f poc/helm/{dc}/values.yaml"
 }
 
-# ── Step 6: wait for CH to be Ready ───────────────────────────────────────────
+# ── Step 6: Wait for CH Ready ──────────────────────────────────────────────────
 
 wait_for_clickhouse() {
     log "Waiting for ClickHouse pods to be Ready"
-    for dc in fra muc ham; do
-        wait_for_pods "$dc" "app.kubernetes.io/name=clickhouse" 1
-    done
+    wait_for_pods "$FRA_CTX" fra "app.kubernetes.io/name=clickhouse" 1
+    wait_for_pods "$MUC_CTX" muc "app.kubernetes.io/name=clickhouse" 1
+    wait_for_pods "$HAM_CTX" ham "app.kubernetes.io/name=clickhouse" 1
 }
 
-# ── Step 7: apply schemas ──────────────────────────────────────────────────────
+# ── Step 7: Patch federated_dcs remote_servers ────────────────────────────────
+
+patch_federation() {
+    log "Patching federated_dcs remote_servers with real node IPs"
+    bash "$SCRIPT_DIR/scripts/patch-federation.sh"
+}
+
+# ── Step 8: Apply schemas ──────────────────────────────────────────────────────
 
 apply_schemas() {
     log "Applying ClickHouse schemas (Tier 1 → 2 → 3 → RBAC)"
     bash "$SCRIPT_DIR/scripts/apply-schemas.sh"
 }
 
-# ── Step 8: print access summary ──────────────────────────────────────────────
+# ── Step 9: Print access summary ──────────────────────────────────────────────
 
 print_summary() {
     log "POC is ready"
     echo ""
-    echo "  Host access (via NodePort, mapped from kind-config.yaml):"
-    echo "    FRA HTTP: http://localhost:8801   native TCP: localhost:9801"
-    echo "    MUC HTTP: http://localhost:8802   native TCP: localhost:9802"
-    echo "    HAM HTTP: http://localhost:8803   native TCP: localhost:9803"
+    echo "  Host access (NodePort → kind control-plane → CH pod):"
+    echo "    FRA  HTTP: http://localhost:8801    TCP: clickhouse-client --host localhost --port 9801"
+    echo "    MUC  HTTP: http://localhost:8802    TCP: clickhouse-client --host localhost --port 9802"
+    echo "    HAM  HTTP: http://localhost:8803    TCP: clickhouse-client --host localhost --port 9803"
     echo ""
-    echo "  Quick test (clickhouse-client):"
+    echo "  Cross-DC query (run from FRA):"
     echo "    clickhouse-client --host localhost --port 9801 \\"
     echo "      --query \"SELECT dc_name, count() FROM default.dist_test_global GROUP BY dc_name ORDER BY dc_name\""
     echo ""
-    echo "  Or via HTTP:"
+    echo "  HTTP smoke test:"
     echo "    curl 'http://localhost:8801/?query=SELECT+dc_name,count()+FROM+default.dist_test_global+GROUP+BY+dc_name'"
     echo ""
-    echo "  Run verification suite:"
+    echo "  Full verification suite:"
     echo "    bash poc/scripts/verify.sh"
     echo ""
-    echo "  Tear down:"
+    echo "  Tear down all 3 clusters:"
     echo "    bash poc/teardown.sh"
 }
 
 # ── main ──────────────────────────────────────────────────────────────────────
 
 check_prereqs
-create_cluster
+create_clusters
 apply_namespaces
 deploy_keepers
 deploy_clickhouse
 verify_naming
 wait_for_clickhouse
+patch_federation
 apply_schemas
 print_summary

@@ -1,11 +1,14 @@
 # ClickHouse Helm chart values for DC: MUC
 # Helm chart: clickhouse/clickhouse  (https://charts.clickhouse.com)
 #
-# Pod naming produced by this chart with fullnameOverride=muc, shards=1:
-#   StatefulSet: muc-shard-0
-#   Pod:         muc-shard-0-0
+# Assumed pod naming (fullnameOverride=muc, shards=1, replicaCount=1):
+#   StatefulSet:  muc-shard-0
+#   Pod:          muc-shard-0-0
 #   Headless svc: muc-headless
-#   FQDN:        muc-shard-0-0.muc-headless.muc.svc.cluster.local
+#   Pod FQDN:     muc-shard-0-0.muc-headless.muc.svc.cluster.local
+#
+# federated_dcs remote_servers are NOT included here. They are injected by
+# poc/scripts/patch-federation.sh after node IPs are known.
 
 fullnameOverride: muc
 
@@ -15,10 +18,9 @@ clusterName: muc_local
 
 image:
   repository: clickhouse/clickhouse-server
-  tag: "25.3"
+  tag: "latest"
   pullPolicy: IfNotPresent
 
-# Disable the chart's built-in keeper -- we deploy it externally
 keeper:
   enabled: false
 
@@ -39,7 +41,7 @@ persistence:
 
 resources:
   requests:
-    cpu: 500m
+    cpu: 250m
     memory: 512Mi
   limits:
     cpu: "2"
@@ -67,27 +69,6 @@ extraConfigFiles:
             </replica>
           </shard>
         </muc_local>
-
-        <federated_dcs>
-          <shard>
-            <replica>
-              <host>fra-shard-0-0.fra-headless.fra.svc.cluster.local</host>
-              <port>9000</port>
-            </replica>
-          </shard>
-          <shard>
-            <replica>
-              <host>muc-shard-0-0.muc-headless.muc.svc.cluster.local</host>
-              <port>9000</port>
-            </replica>
-          </shard>
-          <shard>
-            <replica>
-              <host>ham-shard-0-0.ham-headless.ham.svc.cluster.local</host>
-              <port>9000</port>
-            </replica>
-          </shard>
-        </federated_dcs>
       </remote_servers>
     </clickhouse>
 
