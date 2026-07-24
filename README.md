@@ -19,7 +19,13 @@ crosses a DC boundary.
 8. [Running queries](#running-queries)
 9. [Teardown](#teardown)
 10. [Design notes](#design-notes)
+    - [Three separate kind clusters](#three-separate-kind-clusters)
+    - [Single-node Keeper](#single-node-keeper-with-localhost-raft-hostname)
+    - [Single replica per DC](#single-replica-per-dc)
+    - [Dynamic federation patching](#dynamic-federation-patching)
     - [Shard pruning and optimize_skip_unused_shards](#shard-pruning-and-optimize_skip_unused_shards)
+    - [TLS for cross-DC communication](#tls-for-cross-dc-communication)
+    - [Stale Keeper digest after pod restart](#stale-keeper-digest-after-pod-restart)
 
 ---
 
@@ -424,7 +430,7 @@ nothing remains on disk.
 
 ## Design notes
 
-**Three separate kind clusters**
+### Three separate kind clusters
 Each DC runs in its own kind cluster, giving fully independent Kubernetes API
 servers, CNI networks, and Keeper ensembles — closer to real DC isolation than
 a single cluster with three namespaces. Cross-cluster communication uses
@@ -432,18 +438,18 @@ NodePort services on the shared Docker/Podman `kind` network; no MetalLB or
 manual routing is required because kind places all cluster nodes on the same
 bridge network by default.
 
-**Single-node Keeper with `localhost` raft hostname**
+### Single-node Keeper with `localhost` raft hostname
 Each DC uses a one-node Keeper. The `raft_configuration` uses `hostname:
 localhost` to avoid a DNS bootstrap race (the pod's own headless-service DNS
 entry isn't available until after the pod starts). For production, use a
 3-node ensemble and replace `localhost` with each node's FQDN.
 
-**Single replica per DC**
+### Single replica per DC
 `replicaCount: 1` means `ReplicatedMergeTree` behaves like `MergeTree` — no
 intra-DC replication. Increment `replicaCount` in `values.yaml` and re-run
 `helm upgrade` to add replicas.
 
-**Dynamic federation patching**
+### Dynamic federation patching
 `federated_dcs` remote_servers are not in the committed `values.yaml` files
 because the kind node IPs are not known until the clusters exist.
 `patch-federation.sh` discovers IPs at runtime and injects them via
@@ -458,7 +464,7 @@ The shard order must match `federated_dcs` in `remote_servers.xml`
 (FRA=shard 0, MUC=shard 1, HAM=shard 2). Unknown `dc_name` values fall back
 to shard 0 (FRA).
 
-**Shard pruning and `optimize_skip_unused_shards`**
+### Shard pruning and `optimize_skip_unused_shards`
 Without this setting ClickHouse fans out every `dist_test_global` query to all
 three DC shards and applies the WHERE filter only after receiving results.
 The setting must be explicitly enabled; there are three ways to do it:
@@ -501,7 +507,7 @@ Alternatively, run `SYSTEM FLUSH LOGS` then check `system.query_log.read_rows`
 — a pruned single-DC query reads fewer rows than an unpruned full-scan of the
 same data.
 
-**TLS for cross-DC communication**
+### TLS for cross-DC communication
 `scripts/setup-tls.sh` adds mutual TLS to all CH-to-CH federation traffic.
 It is called automatically by `setup.sh` (step 8) and can also be run standalone
 to retrofit TLS onto a running demo.
@@ -557,7 +563,7 @@ with mutual TLS.
 > or by adding the CA to the system trust store. Using `--accept-invalid-certificate`
 > bypasses validation entirely and is only appropriate for smoke tests.
 
-**Stale Keeper digest after pod restart**
+### Stale Keeper digest after pod restart
 The ClickHouse operator restarts CH pods whenever the `ClickHouseCluster` CR
 changes. Because both CH and Keeper use `emptyDir` storage (no PVCs in this
 demo), a restarted CH pod presents a fresh replica UUID to Keeper. But if only
