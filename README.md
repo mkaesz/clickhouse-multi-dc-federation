@@ -132,44 +132,18 @@ Writers can never `INSERT` into `dist_test_global` — enforced by SQL `REVOKE`.
 
 | Tool | Minimum version | Install |
 |------|----------------|---------|
-| Docker **or** Podman | Docker 20+ / Podman 4.3+ | see below |
+| Docker | 20+ | [Docker Desktop](https://docs.docker.com/get-docker/) |
 | kind | 0.20+ | `brew install kind` |
 | kubectl | 1.28+ | `brew install kubectl` |
 | Helm | 3.12+ | `brew install helm` |
 | clickhouse-client | any | `brew install clickhouse` (optional, for local queries) |
 
-**Docker:**
-```bash
-# macOS / Windows: Docker Desktop  https://docs.docker.com/get-docker/
-docker info
-```
-
-**Podman (alternative to Docker):**
-```bash
-# macOS
-brew install podman
-podman machine init
-podman machine start
-
-# Linux (rootless)
-# Install via your distro's package manager, then:
-systemctl --user enable --now podman.socket
-# Ensure cgroup v2 is enabled: cat /sys/fs/cgroup/cgroup.controllers
-
-# Verify
-podman info
-```
-
-`setup.sh` auto-detects which runtime is running and sets
-`KIND_EXPERIMENTAL_PROVIDER=podman` for kind automatically — no manual
-configuration required.
-
 Verify all tools:
 ```bash
+docker info
 kind version
 kubectl version --client
 helm version
-docker info   # or: podman info
 ```
 
 ---
