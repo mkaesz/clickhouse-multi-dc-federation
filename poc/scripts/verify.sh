@@ -26,6 +26,12 @@ POD_FRA=$(ch_pod "$FRA_CTX" fra)
 POD_MUC=$(ch_pod "$MUC_CTX" muc)
 POD_HAM=$(ch_pod "$HAM_CTX" ham)
 
+echo "=== Reset local tables for repeatable results ==="
+run_query "$FRA_CTX" fra "$POD_FRA" "TRUNCATE TABLE default.test_local"
+run_query "$MUC_CTX" muc "$POD_MUC" "TRUNCATE TABLE default.test_local"
+run_query "$HAM_CTX" ham "$POD_HAM" "TRUNCATE TABLE default.test_local"
+
+echo ""
 echo "=== Insert sample rows into each DC ==="
 run_query "$FRA_CTX" fra "$POD_FRA" \
     "INSERT INTO default.dist_test_regional (id, event_time, payload) VALUES (1, now(), 'test from FRA')"
@@ -60,11 +66,23 @@ run_query "$FRA_CTX" fra "$POD_FRA" \
 
 echo ""
 echo "=== RBAC: confirm app_writer cannot INSERT into dist_test_global ==="
-echo "  (Expected: Code 497 - Not enough privileges)"
+echo "  (Creating test user with app_writer role, then attempting forbidden insert)"
 kubectl exec --context "$FRA_CTX" -n fra "$POD_FRA" -- \
-    clickhouse-client \
+    clickhouse-client --query "
+        CREATE USER IF NOT EXISTS rbac_test_user IDENTIFIED WITH no_password;
+        GRANT app_writer TO rbac_test_user;
+    " 2>&1
+
+result=$(kubectl exec --context "$FRA_CTX" -n fra "$POD_FRA" -- \
+    clickhouse-client --user rbac_test_user \
     --query "INSERT INTO default.dist_test_global (id, event_time, payload, dc_name) VALUES (9999, now(), 'should fail', 'FRA')" \
-    2>&1 | grep -E "Exception|Code|error" | head -3 || true
+    2>&1 || true)
+
+if echo "$result" | grep -qE "Code: 497|Not enough privileges"; then
+    echo "  PASS: insert correctly rejected (Code 497 - Not enough privileges)"
+else
+    echo "  FAIL: expected Code 497 but got: $result"
+fi
 
 echo ""
 echo "=== Verification complete ==="
