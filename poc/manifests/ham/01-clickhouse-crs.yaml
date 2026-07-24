@@ -1,0 +1,19 @@
+---
+apiVersion: clickhouse.com/v1alpha1
+kind: KeeperCluster
+metadata:
+  name: ham
+  namespace: ham
+spec:
+  replicas: 1
+---
+apiVersion: clickhouse.com/v1alpha1
+kind: ClickHouseCluster
+metadata:
+  name: ham
+  namespace: ham
+spec:
+  replicas: 1
+  shards: 1
+  keeperClusterRef:
+    name: ham

@@ -1,0 +1,19 @@
+---
+apiVersion: clickhouse.com/v1alpha1
+kind: KeeperCluster
+metadata:
+  name: muc
+  namespace: muc
+spec:
+  replicas: 1
+---
+apiVersion: clickhouse.com/v1alpha1
+kind: ClickHouseCluster
+metadata:
+  name: muc
+  namespace: muc
+spec:
+  replicas: 1
+  shards: 1
+  keeperClusterRef:
+    name: muc

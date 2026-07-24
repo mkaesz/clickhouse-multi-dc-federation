@@ -15,7 +15,7 @@ HAM_CTX="kind-clickhouse-multi-dc-federation-demo-ham"
 ch_pod() {
     local ctx="$1" ns="$2"
     kubectl get pods --context "$ctx" -n "$ns" \
-        -l "app.kubernetes.io/name=clickhouse" \
+        -l "clickhouse.com/role=clickhouse-server" \
         --field-selector=status.phase=Running \
         -o jsonpath='{.items[0].metadata.name}' 2>/dev/null
 }

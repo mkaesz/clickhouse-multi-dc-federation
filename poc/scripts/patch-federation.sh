@@ -1,17 +1,13 @@
 #!/usr/bin/env bash
 # Discovers each DC's kind node IP and injects federated_dcs remote_servers
-# into every cluster via helm upgrade --reuse-values, then reloads CH config.
+# into every ClickHouseCluster CR via kubectl patch, then reloads CH config.
 #
 # Cross-cluster routing: all kind clusters share the Docker/Podman "kind"
-# network, so a pod in cluster FRA can reach NodePort 30901 on the MUC
-# node IP via kube-proxy NAT. No additional network setup required.
+# network. A pod in FRA can reach NodePort 30901 on the MUC node IP directly.
 #
 # Run from the repo root: bash poc/scripts/patch-federation.sh
 
 set -euo pipefail
-
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-HELM_VALUES="$SCRIPT_DIR/../helm"
 
 FRA_CTX="kind-clickhouse-multi-dc-federation-demo-fra"
 MUC_CTX="kind-clickhouse-multi-dc-federation-demo-muc"
@@ -21,9 +17,6 @@ log()  { echo ""; echo "▶  $*"; }
 info() { echo "   $*"; }
 
 # ── Get node IPs ───────────────────────────────────────────────────────────────
-# In kind, all cluster nodes are on the shared "kind" Docker/Podman network.
-# Their InternalIP is directly reachable from pods in other kind clusters
-# (traffic is masqueraded through the local node).
 
 log "Discovering kind node IPs"
 FRA_IP=$(kubectl get nodes --context "$FRA_CTX" \
@@ -42,100 +35,89 @@ if [ -z "$FRA_IP" ] || [ -z "$MUC_IP" ] || [ -z "$HAM_IP" ]; then
     exit 1
 fi
 
-# ── Generate values patch ──────────────────────────────────────────────────────
+# ── Patch ClickHouseCluster CRs ────────────────────────────────────────────────
+# The operator writes spec.settings.extraConfig as-is to
+# /etc/clickhouse-server/config.d/99-extra-config.yaml.
+# ClickHouse merges this YAML with the operator-generated 00-cluster.yaml
+# (which already defines remote_servers.default for the local cluster).
+# Adding federated_dcs here creates a second remote_servers entry.
 
-write_federation_patch() {
-    local out="$1"
-    local local_cluster="$2"
-    local local_host="$3"
-    local local_port="${4:-9000}"
-
-    # Build the XML in a variable first, then emit valid YAML literal block
-    local xml
-    xml=$(cat <<XML
-<clickhouse>
-  <remote_servers replace="1">
-    <${local_cluster}>
-      <shard>
-        <replica>
-          <host>${local_host}</host>
-          <port>${local_port}</port>
-        </replica>
-      </shard>
-    </${local_cluster}>
-    <federated_dcs>
-      <shard>
-        <replica>
-          <host>${FRA_IP}</host>
-          <port>30901</port>
-        </replica>
-      </shard>
-      <shard>
-        <replica>
-          <host>${MUC_IP}</host>
-          <port>30902</port>
-        </replica>
-      </shard>
-      <shard>
-        <replica>
-          <host>${HAM_IP}</host>
-          <port>30903</port>
-        </replica>
-      </shard>
-    </federated_dcs>
-  </remote_servers>
-</clickhouse>
-XML
-)
-
-    printf 'extraConfigFiles:\n' > "$out"
-    printf '  remote_servers.xml: |\n' >> "$out"
-    while IFS= read -r line; do
-        printf '    %s\n' "$line" >> "$out"
-    done <<< "$xml"
-}
-
-# ── Apply patch to each cluster ────────────────────────────────────────────────
-
-apply_patch() {
+patch_cr() {
     local dc="$1"
     local ctx="$2"
-    local local_cluster="${dc}_local"
-    local local_host="${dc}-shard-0-0.${dc}-headless.${dc}.svc.cluster.local"
-    local patch_file
-    patch_file=$(mktemp /tmp/federation-patch-${dc}-XXXXXX.yaml)
 
-    info "Writing federation patch for $dc → $patch_file"
-    write_federation_patch "$patch_file" "$local_cluster" "$local_host"
+    info "Patching ClickHouseCluster/$dc in $ctx"
 
-    info "helm upgrade $dc (--reuse-values + federation patch)"
-    helm upgrade "$dc" clickhouse/clickhouse \
-        --kube-context "$ctx" \
+    # Build JSON patch (raw JSON written verbatim to 99-extra-config.yaml)
+    local patch
+    patch=$(cat <<JSON
+{
+  "spec": {
+    "settings": {
+      "extraConfig": {
+        "remote_servers": {
+          "federated_dcs": {
+            "shard": [
+              {"replica": {"host": "${FRA_IP}", "port": 30901}},
+              {"replica": {"host": "${MUC_IP}", "port": 30902}},
+              {"replica": {"host": "${HAM_IP}", "port": 30903}}
+            ]
+          }
+        }
+      }
+    }
+  }
+}
+JSON
+)
+
+    kubectl patch clickhousecluster "$dc" \
+        --context "$ctx" \
         --namespace "$dc" \
-        --reuse-values \
-        --values "$patch_file" \
-        --wait --timeout 3m
-
-    rm -f "$patch_file"
+        --type merge \
+        --patch "$patch"
 }
 
 log "Patching FRA"
-apply_patch fra "$FRA_CTX"
+patch_cr fra "$FRA_CTX"
 
 log "Patching MUC"
-apply_patch muc "$MUC_CTX"
+patch_cr muc "$MUC_CTX"
 
 log "Patching HAM"
-apply_patch ham "$HAM_CTX"
+patch_cr ham "$HAM_CTX"
 
-# ── Reload config (belt-and-suspenders after Helm upgrade) ────────────────────
+# ── Wait for operator to roll out updated config ───────────────────────────────
+# The extraConfig change triggers RequiresRestart=true, so the operator
+# will restart CH pods with the new config. Wait for them to come back.
+
+wait_for_ch_pod() {
+    local dc="$1" ctx="$2"
+    local max=60 i=0
+    info "Waiting for $dc CH pod to be Ready after config patch ..."
+    until [ "$(kubectl get pods --context "$ctx" -n "$dc" \
+        -l 'clickhouse.com/role=clickhouse-server' \
+        -o jsonpath='{range .items[*]}{range .status.containerStatuses[*]}{.ready}{"\n"}{end}{end}' 2>/dev/null \
+        | grep -c '^true$' || true)" -ge 1 ]; do
+        i=$((i+1))
+        [ "$i" -ge "$max" ] && echo "  ERROR: Timed out" && exit 1
+        sleep 5
+    done
+    info "  $dc CH pod Ready"
+}
+
+log "Waiting for CH pods to re-stabilize after config patch"
+wait_for_ch_pod fra "$FRA_CTX"
+wait_for_ch_pod muc "$MUC_CTX"
+wait_for_ch_pod ham "$HAM_CTX"
+
+# ── Trigger explicit config reload (belt-and-suspenders) ─────────────────────
 
 reload_config() {
-    local dc="$1"
-    local ctx="$2"
+    local dc="$1" ctx="$2"
     local pod
     pod=$(kubectl get pods --context "$ctx" -n "$dc" \
-        -l "app.kubernetes.io/name=clickhouse" \
+        -l 'clickhouse.com/role=clickhouse-server' \
         --field-selector=status.phase=Running \
         -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
     if [ -n "$pod" ]; then
@@ -145,7 +127,7 @@ reload_config() {
     fi
 }
 
-log "Reloading ClickHouse config on all DCs"
+log "Reloading ClickHouse config"
 reload_config fra "$FRA_CTX"
 reload_config muc "$MUC_CTX"
 reload_config ham "$HAM_CTX"

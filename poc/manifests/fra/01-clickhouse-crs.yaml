@@ -1,0 +1,19 @@
+---
+apiVersion: clickhouse.com/v1alpha1
+kind: KeeperCluster
+metadata:
+  name: fra
+  namespace: fra
+spec:
+  replicas: 1
+---
+apiVersion: clickhouse.com/v1alpha1
+kind: ClickHouseCluster
+metadata:
+  name: fra
+  namespace: fra
+spec:
+  replicas: 1
+  shards: 1
+  keeperClusterRef:
+    name: fra

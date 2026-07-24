@@ -6,8 +6,7 @@ metadata:
 spec:
   type: NodePort
   selector:
-    app.kubernetes.io/instance: muc
-    app.kubernetes.io/name: clickhouse
+    clickhouse.com/role: clickhouse-server
   ports:
     - name: http
       port: 8123

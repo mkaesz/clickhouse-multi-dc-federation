@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Full POC setup: one kind cluster per DC (FRA / MUC / HAM).
-# Each cluster gets its own external Keeper + ClickHouse (via Helm).
-# Cross-DC federation is wired via NodePort on the shared kind network.
+# Each cluster gets the official ClickHouse operator, a KeeperCluster, and a
+# ClickHouseCluster.  Cross-DC federation is wired via NodePort on the shared
+# kind Docker/Podman network.
 #
 # Run from the repo root:  bash poc/setup.sh
 #
@@ -11,11 +12,15 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MANIFESTS="$SCRIPT_DIR/manifests"
-HELM_VALUES="$SCRIPT_DIR/helm"
 
 FRA_CTX="kind-clickhouse-multi-dc-federation-demo-fra"
 MUC_CTX="kind-clickhouse-multi-dc-federation-demo-muc"
 HAM_CTX="kind-clickhouse-multi-dc-federation-demo-ham"
+
+OPERATOR_NS="clickhouse-operator-system"
+OPERATOR_VERSION="0.0.7"
+OPERATOR_CHART_URL="https://github.com/ClickHouse/clickhouse-operator/releases/download/v${OPERATOR_VERSION}/clickhouse-operator-helm-${OPERATOR_VERSION}.tgz"
+OPERATOR_CHART_TGZ="/tmp/clickhouse-operator-helm-${OPERATOR_VERSION}.tgz"
 
 # ── helpers ────────────────────────────────────────────────────────────────────
 
@@ -87,79 +92,71 @@ apply_namespaces() {
     kubectl apply --context "$HAM_CTX" -f "$MANIFESTS/ham/00-namespace.yaml"
 }
 
-# ── Step 3: External Keepers ───────────────────────────────────────────────────
+# ── Step 3: Install ClickHouse operator ───────────────────────────────────────
+# Installed with webhooks disabled — no cert-manager dependency for POC.
 
-deploy_keepers() {
-    log "Deploying external ClickHouse Keepers"
-    kubectl apply --context "$FRA_CTX" -f "$MANIFESTS/fra/01-keeper.yaml"
-    kubectl apply --context "$MUC_CTX" -f "$MANIFESTS/muc/01-keeper.yaml"
-    kubectl apply --context "$HAM_CTX" -f "$MANIFESTS/ham/01-keeper.yaml"
+install_operator() {
+    log "Installing ClickHouse operator (webhooks disabled)"
 
-    log "Waiting for Keepers to be Ready"
-    wait_for_pods "$FRA_CTX" fra "app=fra-keeper" 1
-    wait_for_pods "$MUC_CTX" muc "app=muc-keeper" 1
-    wait_for_pods "$HAM_CTX" ham "app=ham-keeper" 1
-}
+    if [ ! -f "$OPERATOR_CHART_TGZ" ]; then
+        info "Downloading operator chart v${OPERATOR_VERSION} ..."
+        curl -fsSL "$OPERATOR_CHART_URL" -o "$OPERATOR_CHART_TGZ"
+    fi
 
-# ── Step 4: ClickHouse via Helm ────────────────────────────────────────────────
-
-deploy_clickhouse() {
-    log "Adding ClickHouse Helm repo"
-    helm repo add clickhouse https://charts.clickhouse.com 2>/dev/null || true
-    helm repo update clickhouse
-
-    log "Installing ClickHouse on each cluster"
     for dc in fra muc ham; do
         local ctx="kind-clickhouse-multi-dc-federation-demo-${dc}"
-        if helm status "$dc" --kube-context "$ctx" -n "$dc" &>/dev/null; then
-            info "Release '$dc' already exists in ns=$dc ctx=$ctx, upgrading"
-            helm upgrade "$dc" clickhouse/clickhouse \
-                --kube-context "$ctx" \
-                --namespace "$dc" \
-                --values "$HELM_VALUES/$dc/values.yaml" \
-                --wait --timeout 5m
+        if helm status clickhouse-operator --kube-context "$ctx" -n "$OPERATOR_NS" &>/dev/null; then
+            info "Operator already installed in $dc, skipping"
         else
-            info "Installing release '$dc' in ns=$dc ctx=$ctx"
-            helm install "$dc" clickhouse/clickhouse \
+            info "Installing operator in $dc"
+            helm install clickhouse-operator "$OPERATOR_CHART_TGZ" \
                 --kube-context "$ctx" \
-                --namespace "$dc" \
-                --values "$HELM_VALUES/$dc/values.yaml" \
-                --wait --timeout 5m
+                --create-namespace \
+                --namespace "$OPERATOR_NS" \
+                --set webhook.enabled=false \
+                --set certManager.enabled=false \
+                --wait --timeout 3m
         fi
     done
+}
 
-    log "Applying NodePort services for host access"
+# ── Step 4: Deploy KeeperCluster + ClickHouseCluster CRs ─────────────────────
+# The operator auto-wires Keeper → ClickHouse; no manual config injection needed.
+# Pod naming (ClickHouseCluster named 'fra', shard 0, replica 0):
+#   StatefulSet: fra-clickhouse-0-0   Pod: fra-clickhouse-0-0-0
+#   Headless svc: fra-clickhouse-headless
+# Pod naming (KeeperCluster named 'fra', replica 0):
+#   StatefulSet: fra-keeper-0         Pod: fra-keeper-0-0
+#   Headless svc: fra-keeper-headless
+
+deploy_clickhouse_clusters() {
+    log "Deploying KeeperCluster + ClickHouseCluster CRs"
+    kubectl apply --context "$FRA_CTX" -f "$MANIFESTS/fra/01-clickhouse-crs.yaml"
+    kubectl apply --context "$MUC_CTX" -f "$MANIFESTS/muc/01-clickhouse-crs.yaml"
+    kubectl apply --context "$HAM_CTX" -f "$MANIFESTS/ham/01-clickhouse-crs.yaml"
+
+    log "Applying NodePort services"
     kubectl apply --context "$FRA_CTX" -f "$MANIFESTS/fra/02-nodeport.yaml"
     kubectl apply --context "$MUC_CTX" -f "$MANIFESTS/muc/02-nodeport.yaml"
     kubectl apply --context "$HAM_CTX" -f "$MANIFESTS/ham/02-nodeport.yaml"
 }
 
-# ── Step 5: Verify pod naming ──────────────────────────────────────────────────
+# ── Step 5: Wait for Keeper pods Ready ────────────────────────────────────────
 
-verify_naming() {
-    log "Actual CH pod/service names per cluster"
-    for dc in fra muc ham; do
-        local ctx="kind-clickhouse-multi-dc-federation-demo-${dc}"
-        info "--- $dc ($ctx) ---"
-        kubectl get pods --context "$ctx" -n "$dc" \
-            -l "app.kubernetes.io/name=clickhouse" \
-            -o custom-columns="NAME:.metadata.name,STATUS:.status.phase" 2>/dev/null || true
-        kubectl get svc --context "$ctx" -n "$dc" 2>/dev/null \
-            | grep -v "keeper" | grep -v "nodeport" || true
-    done
-    echo ""
-    info "Expected headless service: {dc}-headless  |  pod: {dc}-shard-0-0"
-    info "If names differ, update extraConfigFiles.remote_servers.xml in poc/helm/{dc}/values.yaml"
-    info "then re-run: helm upgrade {dc} clickhouse/clickhouse --kube-context kind-clickhouse-multi-dc-federation-demo-{dc} --reuse-values --wait -f poc/helm/{dc}/values.yaml"
+wait_for_keeper() {
+    log "Waiting for Keeper pods to be Ready"
+    wait_for_pods "$FRA_CTX" fra "clickhouse.com/role=clickhouse-keeper" 1
+    wait_for_pods "$MUC_CTX" muc "clickhouse.com/role=clickhouse-keeper" 1
+    wait_for_pods "$HAM_CTX" ham "clickhouse.com/role=clickhouse-keeper" 1
 }
 
-# ── Step 6: Wait for CH Ready ──────────────────────────────────────────────────
+# ── Step 6: Wait for ClickHouse pods Ready ────────────────────────────────────
 
 wait_for_clickhouse() {
     log "Waiting for ClickHouse pods to be Ready"
-    wait_for_pods "$FRA_CTX" fra "app.kubernetes.io/name=clickhouse" 1
-    wait_for_pods "$MUC_CTX" muc "app.kubernetes.io/name=clickhouse" 1
-    wait_for_pods "$HAM_CTX" ham "app.kubernetes.io/name=clickhouse" 1
+    wait_for_pods "$FRA_CTX" fra "clickhouse.com/role=clickhouse-server" 1
+    wait_for_pods "$MUC_CTX" muc "clickhouse.com/role=clickhouse-server" 1
+    wait_for_pods "$HAM_CTX" ham "clickhouse.com/role=clickhouse-server" 1
 }
 
 # ── Step 7: Patch federated_dcs remote_servers ────────────────────────────────
@@ -205,9 +202,9 @@ print_summary() {
 check_prereqs
 create_clusters
 apply_namespaces
-deploy_keepers
-deploy_clickhouse
-verify_naming
+install_operator
+deploy_clickhouse_clusters
+wait_for_keeper
 wait_for_clickhouse
 patch_federation
 apply_schemas

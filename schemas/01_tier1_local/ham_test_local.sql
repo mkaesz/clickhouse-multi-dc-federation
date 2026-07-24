@@ -1,14 +1,14 @@
 -- Tier 1: Local table (the actual data)
 -- DC: HAM
--- Engine: ReplicatedMergeTree (no shared storage across DCs -- each DC coordinates
--- replication only via its own local Keeper ensemble, ham_local)
+-- The operator creates 'default' as a Replicated database, so ReplicatedMergeTree
+-- must be used without explicit ZooKeeper paths (the database handles them).
 
-CREATE TABLE default.test_local ON CLUSTER 'ham_local'
+CREATE TABLE default.test_local ON CLUSTER 'default'
 (
     id         UInt64,
     event_time DateTime,
     payload    String,
     dc_name    LowCardinality(String) DEFAULT 'HAM'
 )
-ENGINE = ReplicatedMergeTree('/clickhouse/{cluster}/tables/{shard}/test_local', '{replica}')
+ENGINE = ReplicatedMergeTree()
 ORDER BY (id, event_time);
