@@ -279,13 +279,37 @@ kubectl get pods,svc --context kind-clickhouse-multi-dc-federation-demo-ham -n h
 
 ## Running queries
 
-### Via clickhouse-client on the host
+### Via clickhouse-client on the host (plain TCP)
 
 ```bash
-clickhouse-client --host localhost --port 9801   # FRA
-clickhouse-client --host localhost --port 9802   # MUC
-clickhouse-client --host localhost --port 9803   # HAM
+clickhouse client --host localhost --port 9801   # FRA
+clickhouse client --host localhost --port 9802   # MUC
+clickhouse client --host localhost --port 9803   # HAM
 ```
+
+### Via clickhouse-client on the host (TLS)
+
+```bash
+# One-time: create a client config that trusts the POC CA
+cat > /tmp/ch-tls-client.xml <<'EOF'
+<config>
+    <openSSL>
+        <client>
+            <caConfig>/tmp/clickhouse-tls/ca.crt</caConfig>
+            <verificationMode>relaxed</verificationMode>
+        </client>
+    </openSSL>
+</config>
+EOF
+
+clickhouse client --host localhost --port 9841 --secure --config-file /tmp/ch-tls-client.xml   # FRA
+clickhouse client --host localhost --port 9842 --secure --config-file /tmp/ch-tls-client.xml   # MUC
+clickhouse client --host localhost --port 9843 --secure --config-file /tmp/ch-tls-client.xml   # HAM
+```
+
+> `clickhouse client` has no `--ssl-ca-cert-file` flag; the CA must be passed
+> via `--config-file`. `--accept-invalid-certificate` skips validation entirely
+> and is only appropriate for quick smoke tests.
 
 ### Via HTTP on the host
 
@@ -302,7 +326,7 @@ curl 'http://localhost:8801/?query=SELECT+dc_name,count()+FROM+default.dist_test
 
 ```bash
 kubectl exec --context kind-clickhouse-multi-dc-federation-demo-fra \
-  -n fra fra-shard-0-0 -- clickhouse-client --query "SELECT 1"
+  -n fra fra-clickhouse-0-0-0 -- clickhouse-client --query "SELECT 1"
 ```
 
 ### Common queries
