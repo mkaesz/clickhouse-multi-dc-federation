@@ -109,7 +109,6 @@ Writers can never `INSERT` into `dist_test_global` - enforced by SQL `REVOKE`.
 │   │   └── roles_and_grants.sql
 │   └── 05_verification/
 │       └── sanity_checks.sql
-├── example_queries.txt
 ├── setup.sh                                       # execute to setup the demo
 ├── teardown.sh                                    # execute to destroy the demo
 ├── manifests/
@@ -370,6 +369,30 @@ SETTINGS optimize_skip_unused_shards = 1;
 -- With dc_name = 'HAM' + pruning: only ReadFromRemote (FRA and MUC not contacted)
 ```
 
+**Alternatively, verify pruning via `system.query_log`:**
+```sql
+-- Run the query first, then flush and inspect read_rows.
+-- A pruned single-DC query reads fewer rows than a full 3-DC scan.
+SELECT * FROM default.dist_test_global
+WHERE dc_name = 'HAM'
+SETTINGS optimize_skip_unused_shards = 1;
+
+SYSTEM FLUSH LOGS;
+
+SELECT read_rows, left(query, 120) AS q
+FROM system.query_log
+WHERE query LIKE '%dist_test_global%dc_name%'
+  AND type = 'QueryFinish'
+  AND event_time >= now() - toIntervalMinute(2)
+ORDER BY event_time DESC
+LIMIT 3;
+-- Pruned query: read_rows = rows on HAM only (FRA + MUC not contacted)
+-- Unpruned query (no SETTINGS): read_rows is higher because all 3 shards are scanned
+```
+
+> **`!=` predicates do not prune.** `WHERE dc_name != 'FRA'` always fans out
+> to all 3 shards. Use `IN ('MUC', 'HAM')` when you need pruning.
+
 **Verify RBAC (should fail with Code 497):**
 ```sql
 INSERT INTO default.dist_test_global (id, event_time, payload, dc_name)
@@ -377,7 +400,42 @@ VALUES (9999, now(), 'should be rejected', 'FRA');
 -- Expected: Code: 497. DB::Exception: Not enough privileges
 ```
 
-See `example_queries.txt` for the complete annotated query set.
+### Cluster topology diagnostics
+
+**All configured clusters on this node:**
+```sql
+-- DISTINCT is required: the Replicated database engine registers the
+-- 'default' cluster independently, causing duplicate rows without it.
+SELECT DISTINCT cluster, shard_num, replica_num, host_name, port, is_local
+FROM system.clusters
+ORDER BY cluster, shard_num, replica_num;
+```
+
+**Cross-DC federation shard health:**
+```sql
+SELECT shard_num, host_name, port, is_local, errors_count, estimated_recovery_time
+FROM system.clusters
+WHERE cluster = 'federated_dcs'
+ORDER BY shard_num;
+-- errors_count > 0 means the remote shard is unreachable
+-- is_local = 0 for all three: NodePort IPs never match the local FQDN,
+-- so ClickHouse always treats the local DC's own shard as remote too
+```
+
+**Replica health for local tables:**
+```sql
+SELECT database, table, is_leader, is_readonly,
+       total_replicas, active_replicas, queue_size, inserts_in_queue
+FROM system.replicas
+ORDER BY database, table;
+-- queue_size > 0 = replication lag; is_readonly = 1 = Keeper unreachable
+```
+
+**Node identity (cluster/shard/replica macros):**
+```sql
+SELECT macro, substitution FROM system.macros ORDER BY macro;
+-- 'shard' and 'replica' are 0-based here; system.clusters.shard_num is 1-based
+```
 
 ---
 
