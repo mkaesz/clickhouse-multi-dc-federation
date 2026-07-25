@@ -307,14 +307,13 @@ verify_tls ham "$HAM_CTX"
 FRA_POD=$(kubectl get pods --context "$FRA_CTX" -n fra \
     -l "clickhouse.com/role=clickhouse-server" \
     -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
-bash scripts/verify.sh 2>&1 | grep -E "===|PASS|FAIL|row_count|count" || true
+bash scripts/verify.sh 2>&1 | grep -E "▶|PASS|FAIL|row_count|count" || true
 
-echo ""
-echo "=== TLS setup complete ==="
-echo "   Secure TCP port : 9440 (inside pods)"
-echo "   NodePorts (cross-DC) : FRA=30941  MUC=30942  HAM=30943"
-echo "   Host access (TLS):"
-echo "     FRA: clickhouse client --host localhost --port 9841 --secure"
-echo "     MUC: clickhouse client --host localhost --port 9842 --secure"
-echo "     HAM: clickhouse client --host localhost --port 9843 --secure"
-echo "   Certs: $CERTS_DIR/"
+log "TLS setup complete"
+info "Secure TCP port : 9440 (inside pods)"
+info "NodePorts (cross-DC) : FRA=30941  MUC=30942  HAM=30943"
+info "Host access (TLS):"
+info "  FRA: clickhouse client --host localhost --port 9841 --secure"
+info "  MUC: clickhouse client --host localhost --port 9842 --secure"
+info "  HAM: clickhouse client --host localhost --port 9843 --secure"
+info "Certs: $CERTS_DIR/"

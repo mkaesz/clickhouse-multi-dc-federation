@@ -4,6 +4,8 @@
 
 set -euo pipefail
 
+info() { echo "   $*"; }
+
 CTX="$1"
 NS="$2"
 SELECTOR="$3"
@@ -12,7 +14,7 @@ TIMEOUT=300
 INTERVAL=5
 ELAPSED=0
 
-echo "  Waiting for $EXPECTED pod(s) [ctx=$CTX ns=$NS selector=$SELECTOR] ..."
+info "Waiting for $EXPECTED pod(s) [ctx=$CTX ns=$NS selector=$SELECTOR] ..."
 
 while true; do
     READY=$(kubectl get pods --context "$CTX" -n "$NS" -l "$SELECTOR" \
@@ -21,14 +23,13 @@ while true; do
         | grep -c "^true$" || true)
 
     if [ "$READY" -ge "$EXPECTED" ]; then
-        echo "  Ready ($READY/$EXPECTED)"
+        info "Ready ($READY/$EXPECTED)"
         exit 0
     fi
 
     if [ "$ELAPSED" -ge "$TIMEOUT" ]; then
-        echo "  ERROR: Timed out after ${TIMEOUT}s. Pod status:"
+        echo "ERROR: Timed out after ${TIMEOUT}s waiting for [$SELECTOR] in $NS"
         kubectl get pods --context "$CTX" -n "$NS" -l "$SELECTOR" 2>/dev/null || true
-        echo "  Pod logs (last 20 lines of first pod):"
         local_pod=$(kubectl get pods --context "$CTX" -n "$NS" -l "$SELECTOR" \
             -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
         if [ -n "$local_pod" ]; then
@@ -37,7 +38,7 @@ while true; do
         exit 1
     fi
 
-    echo "  ... $READY/$EXPECTED ready (${ELAPSED}s elapsed)"
+    info "... $READY/$EXPECTED ready (${ELAPSED}s elapsed)"
     sleep "$INTERVAL"
     ELAPSED=$((ELAPSED + INTERVAL))
 done
