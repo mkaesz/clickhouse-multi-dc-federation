@@ -130,15 +130,10 @@ install_operator() {
 #   Headless svc: fra-keeper-headless
 
 deploy_clickhouse_clusters() {
-    log "Deploying KeeperCluster + ClickHouseCluster CRs"
+    log "Deploying KeeperCluster + ClickHouseCluster CRs + NodePort services"
     kubectl apply --context "$FRA_CTX" -f "$MANIFESTS/fra/01-clickhouse-crs.yaml"
     kubectl apply --context "$MUC_CTX" -f "$MANIFESTS/muc/01-clickhouse-crs.yaml"
     kubectl apply --context "$HAM_CTX" -f "$MANIFESTS/ham/01-clickhouse-crs.yaml"
-
-    log "Applying NodePort services"
-    kubectl apply --context "$FRA_CTX" -f "$MANIFESTS/fra/02-nodeport.yaml"
-    kubectl apply --context "$MUC_CTX" -f "$MANIFESTS/muc/02-nodeport.yaml"
-    kubectl apply --context "$HAM_CTX" -f "$MANIFESTS/ham/02-nodeport.yaml"
 }
 
 # ── Step 5: Wait for Keeper pods Ready ────────────────────────────────────────

@@ -119,14 +119,7 @@ for entry in "fra:$FRA_CTX" "muc:$MUC_CTX" "ham:$HAM_CTX"; do
     | kubectl apply --context "$ctx" -n "$dc" -f -
 done
 
-# ── Step 5: Apply updated NodePort services (adds tcp-secure port 9440) ───────
-
-log "Applying NodePort services (adding tcp-secure port)"
-kubectl apply --context "$FRA_CTX" -f "$SCRIPT_DIR/../manifests/fra/02-nodeport.yaml"
-kubectl apply --context "$MUC_CTX" -f "$SCRIPT_DIR/../manifests/muc/02-nodeport.yaml"
-kubectl apply --context "$HAM_CTX" -f "$SCRIPT_DIR/../manifests/ham/02-nodeport.yaml"
-
-# ── Step 6: Patch ClickHouseCluster CRs ──────────────────────────────────────
+# ── Step 5: Patch ClickHouseCluster CRs ──────────────────────────────────────
 # One patch per DC covering:
 #   - podTemplate.volumes:         mount the TLS secret
 #   - containerTemplate.volumeMounts: expose it at /etc/clickhouse-server/certs
@@ -211,7 +204,7 @@ patch_tls_cr fra "$FRA_CTX"
 patch_tls_cr muc "$MUC_CTX"
 patch_tls_cr ham "$HAM_CTX"
 
-# ── Step 7: Wait for CH pods to restart with new config ───────────────────────
+# ── Step 6: Wait for CH pods to restart with new config ───────────────────────
 
 log "Waiting for CH pods to restart"
 for entry in "fra:$FRA_CTX" "muc:$MUC_CTX" "ham:$HAM_CTX"; do

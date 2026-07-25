@@ -119,8 +119,7 @@ Writers can never `INSERT` into `dist_test_global` — enforced by SQL `REVOKE`.
 │   ├── fra/
 │   │   ├── kind.yaml                              # kind cluster: clickhouse-multi-dc-federation-demo-fra
 │   │   ├── 00-namespace.yaml
-│   │   ├── 01-clickhouse-crs.yaml                 # KeeperCluster + ClickHouseCluster CRs
-│   │   └── 02-nodeport.yaml                       # NodePort for host and cross-cluster access
+│   │   └── 01-clickhouse-crs.yaml                 # KeeperCluster + ClickHouseCluster CRs + NodePort service
 │   ├── muc/  (same)
 │   └── ham/  (same)
 └── scripts/
@@ -216,8 +215,8 @@ reconciles the CRs and creates:
 - A **ClickHouseCluster** (`{dc}`): single shard, single replica CH pod
   (`{dc}-clickhouse-0-0-0`) with headless service `{dc}-clickhouse-headless`.
 
-Then applies `manifests/{dc}/02-nodeport.yaml` to expose each DC's HTTP, TCP,
-and TLS ports on the kind node.
+The NodePort service (HTTP 8123, TCP 9001, TLS 9440) is included in the same
+file and applied in the same step.
 
 Waits for all Keeper and CH pods to become Ready.
 

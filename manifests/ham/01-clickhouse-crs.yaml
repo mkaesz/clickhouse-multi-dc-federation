@@ -17,3 +17,27 @@ spec:
   shards: 1
   keeperClusterRef:
     name: ham
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ham-clickhouse-nodeport
+  namespace: ham
+spec:
+  type: NodePort
+  selector:
+    clickhouse.com/role: clickhouse-server
+  ports:
+    - name: http
+      port: 8123
+      targetPort: 8123
+      nodePort: 30803
+    - name: tcp
+      port: 9001
+      targetPort: 9001
+      nodePort: 30903
+    - name: tcp-secure
+      port: 9440
+      targetPort: 9440
+      nodePort: 30943
+      protocol: TCP
