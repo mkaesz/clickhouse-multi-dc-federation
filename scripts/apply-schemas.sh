@@ -23,9 +23,9 @@ ch_pod() {
 wait_for_ch() {
     local ctx="$1" ns="$2" pod="$3"
     local max=60 i=0
-    echo "  Waiting for clickhouse-client in $ns/$pod ..."
+    echo "  Waiting for clickhouse client in $ns/$pod ..."
     until kubectl exec --context "$ctx" -n "$ns" "$pod" -- \
-            clickhouse-client --query "SELECT 1" &>/dev/null; do
+            clickhouse client --query "SELECT 1" &>/dev/null; do
         i=$((i + 1))
         [ "$i" -ge "$max" ] && echo "  ERROR: CH not responding in $ns/$pod" && exit 1
         sleep 3
@@ -37,7 +37,7 @@ run_sql() {
     local ctx="$1" ns="$2" pod="$3" file="$4"
     echo "  --> [$ns] $(basename "$file")"
     kubectl exec -i --context "$ctx" -n "$ns" "$pod" -- \
-        clickhouse-client --multiquery --echo < "$file"
+        clickhouse client --multiquery --echo < "$file"
 }
 
 echo "=== Discovering CH pods ==="

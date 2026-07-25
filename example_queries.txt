@@ -47,7 +47,7 @@ VALUES (1006, now(), 'relabeled row', 'HAM');
 
 -- 1.5 THIS WILL FAIL when run as a role-restricted user (app_writer /
 --     app_reader have no INSERT grant on the global table). Connect as such
---     a user first:  clickhouse-client --user rbac_test_user
+--     a user first:  clickhouse client --user rbac_test_user
 --     Running as the default admin user will succeed (it has full access).
 
 INSERT INTO default.dist_test_global (id, event_time, payload, dc_name)

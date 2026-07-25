@@ -232,7 +232,7 @@ FRA_POD=$(kubectl get pods --context "$FRA_CTX" -n fra \
     -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
 
 DB_OK=$(kubectl exec --context "$FRA_CTX" -n fra "$FRA_POD" -- \
-    clickhouse-client --port 9001 --query "SHOW DATABASES" 2>/dev/null | grep -c "^default$" || true)
+    clickhouse client --port 9001 --query "SHOW DATABASES" 2>/dev/null | grep -c "^default$" || true)
 
 if [ "$DB_OK" -lt 1 ]; then
     info "Default database missing — restarting Keeper + CH to clear stale digest"
@@ -273,25 +273,25 @@ verify_tls() {
         -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
 
     # Confirm tcp_port_secure (9440) is accepting TLS connections.
-    # clickhouse-client inside the pod doesn't know our custom CA, so we use
+    # clickhouse client inside the pod doesn't know our custom CA, so we use
     # --accept-invalid-certificate (skips cert chain validation for the CLI
     # only — CH server-to-server TLS still validates via openSSL.client.caConfig).
     local tls_ok
     tls_ok=$(kubectl exec --context "$ctx" -n "$dc" "$pod" -- \
-        clickhouse-client --host 127.0.0.1 --port 9440 --secure \
+        clickhouse client --host 127.0.0.1 --port 9440 --secure \
         --accept-invalid-certificate \
         --query "SELECT 'ok'" 2>/dev/null || echo "fail")
 
     # Confirm cross-DC federation is using TLS (errors_count=0 means connections succeed)
     local remote_errors=""
     remote_errors=$(kubectl exec --context "$ctx" -n "$dc" "$pod" -- \
-        clickhouse-client --port 9001 \
+        clickhouse client --port 9001 \
         --query "SELECT sum(errors_count) FROM system.clusters WHERE cluster='federated_dcs' AND is_local=0" 2>/dev/null || echo "?")
 
     if [ "$dc" = "fra" ]; then
         local remote_shards
         remote_shards=$(kubectl exec --context "$ctx" -n "$dc" "$pod" -- \
-            clickhouse-client --port 9001 \
+            clickhouse client --port 9001 \
             --query "SELECT count() FROM system.clusters WHERE cluster='federated_dcs' AND is_local=0" 2>/dev/null || echo "?")
         info "$dc: tls=$tls_ok  remote federated shards=$remote_shards (expect 2)  remote_errors=$remote_errors"
     else
@@ -314,7 +314,7 @@ echo "=== TLS setup complete ==="
 echo "   Secure TCP port : 9440 (inside pods)"
 echo "   NodePorts (cross-DC) : FRA=30941  MUC=30942  HAM=30943"
 echo "   Host access (TLS):"
-echo "     FRA: clickhouse-client --host localhost --port 9841 --secure"
-echo "     MUC: clickhouse-client --host localhost --port 9842 --secure"
-echo "     HAM: clickhouse-client --host localhost --port 9843 --secure"
+echo "     FRA: clickhouse client --host localhost --port 9841 --secure"
+echo "     MUC: clickhouse client --host localhost --port 9842 --secure"
+echo "     HAM: clickhouse client --host localhost --port 9843 --secure"
 echo "   Certs: $CERTS_DIR/"

@@ -133,7 +133,7 @@ reload_config() {
     if [ -n "$pod" ]; then
         info "SYSTEM RELOAD CONFIG on $dc/$pod"
         kubectl exec --context "$ctx" -n "$dc" "$pod" -- \
-            clickhouse-client --query "SYSTEM RELOAD CONFIG" 2>/dev/null || true
+            clickhouse client --query "SYSTEM RELOAD CONFIG" 2>/dev/null || true
     fi
 }
 

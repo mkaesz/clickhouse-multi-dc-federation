@@ -141,7 +141,7 @@ Writers can never `INSERT` into `dist_test_global` — enforced by SQL `REVOKE`.
 | kind | 0.20+ | `brew install kind` |
 | kubectl | 1.28+ | `brew install kubectl` |
 | Helm | 3.12+ | `brew install helm` |
-| clickhouse-client | any | `brew install clickhouse` (optional, for local queries) |
+| clickhouse client | any | `brew install clickhouse` (optional, for local queries) |
 
 Verify all tools:
 ```bash
@@ -169,9 +169,9 @@ images in parallel across three kind clusters).
 
 When the script finishes:
 ```
-   FRA  HTTP: http://localhost:8801    TCP: clickhouse-client --host localhost --port 9801
-   MUC  HTTP: http://localhost:8802    TCP: clickhouse-client --host localhost --port 9802
-   HAM  HTTP: http://localhost:8803    TCP: clickhouse-client --host localhost --port 9803
+   FRA  HTTP: http://localhost:8801    TCP: clickhouse client --host localhost --port 9801
+   MUC  HTTP: http://localhost:8802    TCP: clickhouse client --host localhost --port 9802
+   HAM  HTTP: http://localhost:8803    TCP: clickhouse client --host localhost --port 9803
 ```
 
 Run the full verification suite:
@@ -284,7 +284,7 @@ kubectl get pods,svc --context kind-clickhouse-multi-dc-federation-demo-ham -n h
 
 ## Running queries
 
-### Via clickhouse-client on the host (plain TCP)
+### Via clickhouse client on the host (plain TCP)
 
 ```bash
 clickhouse client --host localhost --port 9801   # FRA
@@ -292,7 +292,7 @@ clickhouse client --host localhost --port 9802   # MUC
 clickhouse client --host localhost --port 9803   # HAM
 ```
 
-### Via clickhouse-client on the host (TLS)
+### Via clickhouse client on the host (TLS)
 
 ```bash
 # One-time: create a client config that trusts the demo CA
@@ -331,7 +331,7 @@ curl 'http://localhost:8801/?query=SELECT+dc_name,count()+FROM+default.dist_test
 
 ```bash
 kubectl exec --context kind-clickhouse-multi-dc-federation-demo-fra \
-  -n fra fra-clickhouse-0-0-0 -- clickhouse-client --query "SELECT 1"
+  -n fra fra-clickhouse-0-0-0 -- clickhouse client --query "SELECT 1"
 ```
 
 ### Common queries

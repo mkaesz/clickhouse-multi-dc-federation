@@ -19,7 +19,7 @@ run_query() {
     local ctx="$1" ns="$2" pod="$3" query="$4"
     echo "  [$ns] $query"
     kubectl exec --context "$ctx" -n "$ns" "$pod" -- \
-        clickhouse-client --query "$query"
+        clickhouse client --query "$query"
 }
 
 POD_FRA=$(ch_pod "$FRA_CTX" fra)
@@ -68,13 +68,13 @@ echo ""
 echo "=== RBAC: confirm app_writer cannot INSERT into dist_test_global ==="
 echo "  (Creating test user with app_writer role, then attempting forbidden insert)"
 kubectl exec --context "$FRA_CTX" -n fra "$POD_FRA" -- \
-    clickhouse-client --query "
+    clickhouse client --query "
         CREATE USER IF NOT EXISTS rbac_test_user IDENTIFIED WITH no_password;
         GRANT app_writer TO rbac_test_user;
     " 2>&1
 
 result=$(kubectl exec --context "$FRA_CTX" -n fra "$POD_FRA" -- \
-    clickhouse-client --user rbac_test_user \
+    clickhouse client --user rbac_test_user \
     --query "INSERT INTO default.dist_test_global (id, event_time, payload, dc_name) VALUES (9999, now(), 'should fail', 'FRA')" \
     2>&1 || true)
 
