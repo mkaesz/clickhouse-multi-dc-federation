@@ -1,8 +1,7 @@
-# ClickHouse Multi-DC Federation — FRA / MUC / HAM
+# ClickHouse Multi-DC Federation
 
-Three independent ClickHouse clusters — one per DC (FRA, MUC, HAM) — each with
-its own external Keeper and no shared storage. Cross-DC access is via
-query-level federation (`remote_servers`) only; no replication or Raft ever
+- Three independent ClickHouse clusters - one per DC (FRA, MUC, HAM)
+- Cross-DC access is via query-level federation only; no replication or Raft ever
 crosses a DC boundary.
 
 ---
@@ -76,9 +75,6 @@ with real node IPs after clusters are up.
 | 2 | `dist_test_regional` | `Distributed('{dc}_local', …)` | Fan-out within one DC |
 | 3 | `dist_test_global` | `Distributed('federated_dcs', …)` | Fan-out across all 3 DCs |
 
-`dist_test_global` shards on `dc_name` via `transform()`:
-`FRA→shard 0`, `MUC→shard 1`, `HAM→shard 2`.
-
 **RBAC roles:**
 
 | Role | Permissions |
@@ -86,7 +82,7 @@ with real node IPs after clusters are up.
 | `app_writer` | `INSERT, SELECT` on `dist_test_regional` and `test_local` |
 | `app_reader` | `SELECT` on `dist_test_global` and `dist_test_regional` |
 
-Writers can never `INSERT` into `dist_test_global` — enforced by SQL `REVOKE`.
+Writers can never `INSERT` into `dist_test_global` - enforced by SQL `REVOKE`.
 
 ---
 
@@ -112,8 +108,8 @@ Writers can never `INSERT` into `dist_test_global` — enforced by SQL `REVOKE`.
 │   └── 05_verification/
 │       └── sanity_checks.sql
 ├── example_queries.txt
-├── setup.sh                                       # ← single entry point
-├── teardown.sh
+├── setup.sh                                       # execute to setup the demo
+├── teardown.sh                                    # execute to destroy the demo
 ├── manifests/
 │   ├── federated_dcs_remote_servers.xml           # Reference config (production FQDNs)
 │   ├── fra/
@@ -126,7 +122,7 @@ Writers can never `INSERT` into `dist_test_global` — enforced by SQL `REVOKE`.
     ├── wait-for-pods.sh
     ├── patch-federation.sh                        # Discovers node IPs, injects federated_dcs
     ├── setup-tls.sh                               # Generates certs, secrets, patches CRs for TLS
-    ├── apply-schemas.sh                           # SQL in correct order
+    ├── apply-schemas.sh                           # SQL from schemas folder in correct order
     └── verify.sh                                  # Inserts + cross-DC queries + RBAC check
 ```
 
@@ -134,13 +130,13 @@ Writers can never `INSERT` into `dist_test_global` — enforced by SQL `REVOKE`.
 
 ## Prerequisites
 
-| Tool | Minimum version | Install |
-|------|----------------|---------|
-| Docker | 20+ | [Docker Desktop](https://docs.docker.com/get-docker/) |
-| kind | 0.20+ | `brew install kind` |
-| kubectl | 1.28+ | `brew install kubectl` |
-| Helm | 3.12+ | `brew install helm` |
-| clickhouse client | any | `brew install clickhouse` (optional, for local queries) |
+| Tool | Minimum version |
+|------|----------------|
+| Docker | 20+ |
+| kind | 0.20+ |
+| kubectl | 1.28+ |
+| Helm | 3.12+ |
+| clickhouse client | recent version |
 
 Verify all tools:
 ```bash
@@ -158,13 +154,9 @@ helm version
 # Clone / cd into the repo root
 cd /path/to/clickhouse-multi-dc-federation
 
-# Full setup: creates 3 clusters, deploys keepers, installs ClickHouse,
-# patches federation config, applies schemas
+# Full setup
 bash setup.sh
 ```
-
-Total time: ~8–12 minutes on first run (dominated by pulling 3× CH + 3× Keeper
-images in parallel across three kind clusters).
 
 When the script finishes:
 ```
@@ -186,22 +178,17 @@ bash scripts/verify.sh
 
 ### 1. Prerequisite check
 Verifies `kind`, `kubectl`, and `helm` are on `$PATH`, then calls
-`detect_runtime()` which tries Docker first, then Podman. If Podman is
-selected, `KIND_EXPERIMENTAL_PROVIDER=podman` is exported for the rest of the
-script so every subsequent `kind` command uses the correct backend.
+`detect_runtime()` which tries Docker first, then Podman.
 
 ### 2. Create 3 kind clusters
 Creates one cluster per DC from the per-DC config files:
 
 ```bash
-kind create cluster --config manifests/fra/kind.yaml   # clickhouse-multi-dc-federation-demo-fra
-kind create cluster --config manifests/muc/kind.yaml   # clickhouse-multi-dc-federation-demo-muc
-kind create cluster --config manifests/ham/kind.yaml   # clickhouse-multi-dc-federation-demo-ham
+kind create cluster --config manifests/fra/kind.yaml   # FRA
+kind create cluster --config manifests/muc/kind.yaml   # MUC
+kind create cluster --config manifests/ham/kind.yaml   # HAM
 ```
-
-Each cluster is a single-node (control-plane only, taint removed via
-`nodeRegistration.taints: []`) with NodePort mappings for host access.
-Skip if a cluster already exists.
+The demo uses NodePorts to expose the ClickHouse cluster to the host.
 
 ### 3. Namespaces
 Creates namespace `fra`, `muc`, or `ham` inside each respective cluster.
@@ -218,8 +205,6 @@ reconciles the CRs and creates:
 The NodePort service (HTTP 8123, TCP 9001, TLS 9440) is included in the same
 file and applied in the same step.
 
-Waits for all Keeper and CH pods to become Ready.
-
 ### 5. Patch federated_dcs (`patch-federation.sh`)
 Discovers the InternalIP of each cluster's kind node and patches the
 `ClickHouseCluster` CR on each DC with a `federated_dcs` remote_servers block
@@ -233,19 +218,14 @@ HAM node IP: 172.18.0.4  → shard 2 in federated_dcs (localhost:9001 for HAM, N
 
 Each DC uses `localhost:9001` for its own shard so ClickHouse marks it
 `is_local=1` and reads locally instead of going through a network hop.
-Followed by `SYSTEM RELOAD CONFIG` on each CH pod.
-
-**Why NodePort IPs work across clusters:** all kind nodes share the Docker/
-Podman `kind` network. A pod in cluster FRA that connects to
-`MUC_NODE_IP:30902` has its traffic masqueraded through the FRA node (via
-kindnet NAT), which then reaches the MUC node on the shared kind network.
-kube-proxy on the MUC node forwards the NodePort to the MUC CH pod.
 
 ### 8. TLS setup (`setup-tls.sh`)
 Runs `scripts/setup-tls.sh` which generates certs, creates K8s Secrets,
 adds the `tcp-secure` NodePorts, patches all three `ClickHouseCluster` CRs,
 and restarts pods if needed. See
 [Design notes → TLS](#tls-for-cross-dc-communication) for details.
+
+One CA shared among all clusters.
 
 ### 9. Schema deployment
 Runs `scripts/apply-schemas.sh` with `--context kind-clickhouse-multi-dc-federation-demo-{dc}` for each DC:
@@ -272,12 +252,6 @@ The operator derives names from the CR name (`fra`, `muc`, `ham`):
 | Keeper Pod | `fra-keeper-0-0` |
 | Keeper headless service | `fra-keeper-headless` |
 
-Check actual names after setup:
-```bash
-kubectl get pods,svc --context kind-clickhouse-multi-dc-federation-demo-fra -n fra
-kubectl get pods,svc --context kind-clickhouse-multi-dc-federation-demo-muc -n muc
-kubectl get pods,svc --context kind-clickhouse-multi-dc-federation-demo-ham -n ham
-```
 
 ---
 
@@ -311,10 +285,6 @@ clickhouse client --host localhost --port 9842 --secure --config-file /tmp/ch-tl
 clickhouse client --host localhost --port 9843 --secure --config-file /tmp/ch-tls-client.xml   # HAM
 ```
 
-> `clickhouse client` has no `--ssl-ca-cert-file` flag; the CA must be passed
-> via `--config-file`. `--accept-invalid-certificate` skips validation entirely
-> and is only appropriate for quick smoke tests.
-
 ### Via HTTP on the host
 
 ```bash
@@ -335,7 +305,7 @@ kubectl exec --context kind-clickhouse-multi-dc-federation-demo-fra \
 
 ### Common queries
 
-**Insert into a DC (regional table only — never the global one):**
+**Insert into a DC (regional table only - never the global one):**
 ```sql
 -- Connect to MUC (localhost:9802), then:
 INSERT INTO default.dist_test_regional (id, event_time, payload)
@@ -415,12 +385,7 @@ See `example_queries.txt` for the complete annotated query set.
 bash teardown.sh
 ```
 
-Deletes all three kind clusters:
-```
-kind delete cluster --name clickhouse-multi-dc-federation-demo-fra
-kind delete cluster --name clickhouse-multi-dc-federation-demo-muc
-kind delete cluster --name clickhouse-multi-dc-federation-demo-ham
-```
+Deletes all three kind clusters.
 
 All Helm releases, namespaces, and data are gone. No persistent storage, so
 nothing remains on disk.
@@ -431,7 +396,7 @@ nothing remains on disk.
 
 ### Three separate kind clusters
 Each DC runs in its own kind cluster, giving fully independent Kubernetes API
-servers, CNI networks, and Keeper ensembles — closer to real DC isolation than
+servers, CNI networks, and Keeper ensembles - closer to real DC isolation than
 a single cluster with three namespaces. Cross-cluster communication uses
 NodePort services on the shared Docker/Podman `kind` network; no MetalLB or
 manual routing is required because kind places all cluster nodes on the same
@@ -444,7 +409,7 @@ entry isn't available until after the pod starts). For production, use a
 3-node ensemble and replace `localhost` with each node's FQDN.
 
 ### Single replica per DC
-`replicaCount: 1` means `ReplicatedMergeTree` behaves like `MergeTree` — no
+`replicaCount: 1` means `ReplicatedMergeTree` behaves like `MergeTree` - no
 intra-DC replication. Increment `replicaCount` in `values.yaml` and re-run
 `helm upgrade` to add replicas.
 
@@ -486,16 +451,12 @@ The setting must be explicitly enabled; there are three ways to do it:
 >   }}}
 > }'
 > ```
-> This is already applied in the demo — all three DCs have the setting active.
+> This is already applied in the demo - all three DCs have the setting active.
 
 The role-level `ALTER ROLE` is included in `schemas/04_rbac/roles_and_grants.sql`
 and is applied automatically by `apply-schemas.sh`. The server profile approach
 is preferred for production because it applies uniformly to all users without
 relying on role assignment.
-
-Pruning only activates for **direct equality or IN predicates on the sharding
-column** (`dc_name` here). `!=`, range comparisons, and expressions on the
-column do not prune — all shards are contacted even with the setting on.
 
 To verify pruning is working, use `EXPLAIN PIPELINE` (not `EXPLAIN`):
 `EXPLAIN` shows the logical plan before execution-time optimisation and looks
@@ -503,13 +464,12 @@ identical regardless of the setting. `EXPLAIN PIPELINE` shows the physical
 plan: a pruned local query shows `ReadFromMergeTree`; a pruned remote-only
 query shows `ReadFromRemote`; an unpruned query shows `Union` of both.
 Alternatively, run `SYSTEM FLUSH LOGS` then check `system.query_log.read_rows`
-— a pruned single-DC query reads fewer rows than an unpruned full-scan of the
+- a pruned single-DC query reads fewer rows than an unpruned full-scan of the
 same data.
 
 ### TLS for cross-DC communication
 `scripts/setup-tls.sh` adds mutual TLS to all CH-to-CH federation traffic.
-It is called automatically by `setup.sh` (step 8) and can also be run standalone
-to retrofit TLS onto a running demo.
+It is called automatically by `setup.sh`.
 
 What it does:
 
@@ -518,11 +478,11 @@ What it does:
    headless-service FQDN, `localhost`, and the kind node IP.
 3. Stores certs as K8s Secrets (`clickhouse-tls`) in each DC namespace.
 4. Applies updated NodePort services that expose `tcp_port_secure: 9440` as
-   NodePort 30941/30942/30943 (host ports 9841/9842/9843).
+   NodePort 30941/30942/30943.
 5. Patches each `ClickHouseCluster` CR to mount the secret and add:
    - `tcp_port_secure: 9440` in `extraConfig`
    - `openSSL.server` and `openSSL.client` blocks pointing at the mounted certs
-   - `remote_servers.federated_dcs` with `secure: 1` — local shard via
+   - `remote_servers.federated_dcs` with `secure: 1` - local shard via
      `localhost:9440`, remote shards via `<nodeIP>:3094{1,2,3}`
 6. Handles stale Keeper state after pod restart (see "Stale Keeper digest" note
    below) and reapplies schemas.
@@ -552,22 +512,7 @@ clickhouse client --host 127.0.0.1 --port 9843 --secure --config-file /tmp/ch-tl
 > `--accept-invalid-certificate` skips validation entirely and is only for
 > quick smoke tests.
 
-`verificationMode: relaxed` is used — the client verifies the server cert
+`verificationMode: relaxed` is used - the client verifies the server cert
 against the CA but does not require a client cert. This is appropriate for
 an internal demo; production deployments should use `verificationMode: strict`
 with mutual TLS.
-
-> **Note:** `clickhouse client` has no `--ssl-ca-cert-file` flag. The CA must
-> be provided via `--config-file` with an `<openSSL><client><caConfig>` block,
-> or by adding the CA to the system trust store. Using `--accept-invalid-certificate`
-> bypasses validation entirely and is only appropriate for smoke tests.
-
-### Stale Keeper digest after pod restart
-The ClickHouse operator restarts CH pods whenever the `ClickHouseCluster` CR
-changes. Because both CH and Keeper use `emptyDir` storage (no PVCs in this
-demo), a restarted CH pod presents a fresh replica UUID to Keeper. But if only
-the CH pod restarts (Keeper keeps running), Keeper still holds the digest from
-the previous CH instance. The operator's `DatabaseSync` then fails with
-`code: 253` ("Replica node already exists and contains unexpected value:
-digest"). Fix: restart both Keeper and CH pods together — `setup-tls.sh`
-handles this automatically after the TLS patch.
