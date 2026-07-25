@@ -18,9 +18,6 @@ MUC_CTX="kind-clickhouse-multi-dc-federation-demo-muc"
 HAM_CTX="kind-clickhouse-multi-dc-federation-demo-ham"
 
 OPERATOR_NS="clickhouse-operator-system"
-OPERATOR_VERSION="0.0.7"
-OPERATOR_CHART_URL="https://github.com/ClickHouse/clickhouse-operator/releases/download/v${OPERATOR_VERSION}/clickhouse-operator-helm-${OPERATOR_VERSION}.tgz"
-OPERATOR_CHART_TGZ="/tmp/clickhouse-operator-helm-${OPERATOR_VERSION}.tgz"
 
 # ── helpers ────────────────────────────────────────────────────────────────────
 
@@ -98,18 +95,13 @@ apply_namespaces() {
 install_operator() {
     log "Installing ClickHouse operator (webhooks disabled)"
 
-    if [ ! -f "$OPERATOR_CHART_TGZ" ]; then
-        info "Downloading operator chart v${OPERATOR_VERSION} ..."
-        curl -fsSL "$OPERATOR_CHART_URL" -o "$OPERATOR_CHART_TGZ"
-    fi
-
     for dc in fra muc ham; do
         local ctx="kind-clickhouse-multi-dc-federation-demo-${dc}"
         if helm status clickhouse-operator --kube-context "$ctx" -n "$OPERATOR_NS" &>/dev/null; then
             info "Operator already installed in $dc, skipping"
         else
             info "Installing operator in $dc"
-            helm install clickhouse-operator "$OPERATOR_CHART_TGZ" \
+            helm install clickhouse-operator oci://ghcr.io/clickhouse/clickhouse-operator-helm \
                 --kube-context "$ctx" \
                 --create-namespace \
                 --namespace "$OPERATOR_NS" \
