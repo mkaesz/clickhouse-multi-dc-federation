@@ -1,8 +1,10 @@
 # ClickHouse Multi-DC Federation
 
-- Three independent ClickHouse clusters - one per DC (FRA, MUC, HAM)
+- Three independent ClickHouse clusters - one per DC (FRA, MUC, HAM) on Kubernetes deployed
+with CLickHouse Operator.
 - Cross-DC access is via query-level federation only; no replication or Raft ever
 crosses a DC boundary.
+- All intra-cluster traffic is fully encrypted.
 
 ---
 
