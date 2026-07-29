@@ -59,7 +59,7 @@ patch_cr() {
 
     # Each shard carries a name (FRA/MUC/HAM). It surfaces as
     # system.clusters.shard_name, which the default.regionToShard dictionary
-    # reads to build the Region -> shard-number sharding key for otel_global.
+    # reads to build the region -> shard-number sharding key for otel_global.
     info "Patching ClickHouseCluster/$dc in $ctx (local shard → localhost:9001)"
 
     local patch

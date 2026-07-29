@@ -8,7 +8,7 @@ CREATE TABLE IF NOT EXISTS default.otel_local ON CLUSTER 'default'
     id         UInt64,
     event_time DateTime,
     payload    String,
-    Region     LowCardinality(String) DEFAULT 'HAM'
+    region     LowCardinality(String) DEFAULT 'HAM'
 )
 ENGINE = ReplicatedMergeTree()
 ORDER BY (id, event_time);

@@ -1,27 +1,27 @@
 -- Sanity checks -- run after all Tier 1/2/3 schemas are deployed to all 3 DCs.
 
--- 1. Confirm each DC's local table only holds rows tagged with its own Region.
+-- 1. Confirm each DC's local table only holds rows tagged with its own region.
 --    Run this individually against each DC's local endpoint.
-SELECT Region, count() FROM default.otel_local GROUP BY Region;
+SELECT region, count() FROM default.otel_local GROUP BY region;
 
 -- 2. Confirm shard pruning works on the global table for a single-DC read.
 EXPLAIN SELECT * FROM default.otel_global
-WHERE Region = 'MUC'
+WHERE region = 'MUC'
 SETTINGS optimize_skip_unused_shards = 1;
 -- Expect: only 1 shard referenced in the plan.
 
 -- 3. Confirm shard pruning works for a multi-DC IN(...) read.
 EXPLAIN SELECT * FROM default.otel_global
-WHERE Region IN ('MUC', 'HAM')
+WHERE region IN ('MUC', 'HAM')
 SETTINGS optimize_skip_unused_shards = 1;
 -- Expect: only 2 shards referenced in the plan (FRA skipped).
 
 -- 4. Example cross-DC aggregation query.
 SELECT
-    Region,
+    region,
     count() AS errors
 FROM default.otel_global
-WHERE Region IN ('MUC', 'HAM')
+WHERE region IN ('MUC', 'HAM')
   AND event_time >= now() - toIntervalHour(1)
 GROUP BY ALL
 ORDER BY ALL ASC

@@ -8,8 +8,8 @@
     shard 1 = FRA, shard 2 = MUC, shard 3 = HAM.
   Each shard carries a <name> (FRA/MUC/HAM). This surfaces as
   system.clusters.shard_name, which the default.regionToShard dictionary reads
-  to build the Region -> (shard_num - 1) sharding-key map used by
-  otel_global. The <name> values MUST match the Region column values.
+  to build the region -> (shard_num - 1) sharding-key map used by
+  otel_global. The <name> values MUST match the region column values.
 -->
 <clickhouse>
   <remote_servers>
