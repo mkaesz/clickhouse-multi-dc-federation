@@ -10,7 +10,7 @@ ENGINE = Distributed(
     default,
     otel_regional,
     -- Sharding key derived from cluster topology via the regionToShard
-    -- dictionary (dc_name -> 0-based shard number), replacing the hardcoded
+    -- dictionary (Region -> 0-based shard number), replacing the hardcoded
     -- transform() map. COMPLEX_KEY_HASHED layout requires a tuple key.
-    dictGet('default.regionToShard', 'shardID', tuple(dc_name))
+    dictGet('default.regionToShard', 'shardID', tuple(Region))
 );

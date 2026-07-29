@@ -42,25 +42,25 @@ run_query "$MUC_CTX" muc "$POD_MUC" \
 run_query "$HAM_CTX" ham "$POD_HAM" \
     "INSERT INTO default.otel_local (id, event_time, payload) VALUES (3, now(), 'test from HAM')"
 
-log "Verify each DC's local table has its own dc_name only"
+log "Verify each DC's local table has its own Region only"
 for pair in "fra:$FRA_CTX" "muc:$MUC_CTX" "ham:$HAM_CTX"; do
     dc="${pair%%:*}"; ctx="${pair##*:}"
     pod=$(ch_pod "$ctx" "$dc")
     run_query "$ctx" "$dc" "$pod" \
-        "SELECT dc_name, count() FROM default.otel_local GROUP BY dc_name"
+        "SELECT Region, count() FROM default.otel_local GROUP BY Region"
 done
 
 log "Cross-DC aggregation via otel_global (from FRA)"
 run_query "$FRA_CTX" fra "$POD_FRA" \
-    "SELECT dc_name, count() AS row_count FROM default.otel_global GROUP BY dc_name ORDER BY dc_name"
+    "SELECT Region, count() AS row_count FROM default.otel_global GROUP BY Region ORDER BY Region"
 
 log "Shard pruning: single-DC filter (should touch 1 shard)"
 run_query "$FRA_CTX" fra "$POD_FRA" \
-    "EXPLAIN SELECT * FROM default.otel_global WHERE dc_name = 'MUC' SETTINGS optimize_skip_unused_shards = 1"
+    "EXPLAIN SELECT * FROM default.otel_global WHERE Region = 'MUC' SETTINGS optimize_skip_unused_shards = 1"
 
 log "Shard pruning: IN() filter (should touch 2 shards)"
 run_query "$FRA_CTX" fra "$POD_FRA" \
-    "EXPLAIN SELECT * FROM default.otel_global WHERE dc_name IN ('MUC','HAM') SETTINGS optimize_skip_unused_shards = 1"
+    "EXPLAIN SELECT * FROM default.otel_global WHERE Region IN ('MUC','HAM') SETTINGS optimize_skip_unused_shards = 1"
 
 log "RBAC: confirm app_writer cannot INSERT into otel_global"
 kubectl exec --context "$FRA_CTX" -n fra "$POD_FRA" -- \
@@ -71,7 +71,7 @@ kubectl exec --context "$FRA_CTX" -n fra "$POD_FRA" -- \
 
 result=$(kubectl exec --context "$FRA_CTX" -n fra "$POD_FRA" -- \
     clickhouse client --user rbac_test_user \
-    --query "INSERT INTO default.otel_global (id, event_time, payload, dc_name) VALUES (9999, now(), 'should fail', 'FRA')" \
+    --query "INSERT INTO default.otel_global (id, event_time, payload, Region) VALUES (9999, now(), 'should fail', 'FRA')" \
     2>&1 || true)
 
 if echo "$result" | grep -qE "Code: 497|Not enough privileges"; then

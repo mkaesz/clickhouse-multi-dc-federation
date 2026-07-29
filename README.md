@@ -298,7 +298,7 @@ curl http://localhost:8802/ping
 curl http://localhost:8803/ping
 
 # Cross-DC row count
-curl 'http://localhost:8801/?query=SELECT+dc_name,count()+FROM+default.otel_global+GROUP+BY+dc_name+ORDER+BY+dc_name'
+curl 'http://localhost:8801/?query=SELECT+Region,count()+FROM+default.otel_global+GROUP+BY+Region+ORDER+BY+Region'
 ```
 
 ### Via kubectl exec
@@ -326,17 +326,17 @@ SELECT * FROM default.otel_regional ORDER BY event_time DESC LIMIT 20;
 
 **Cross-DC aggregation:**
 ```sql
-SELECT dc_name, count() AS rows
+SELECT Region, count() AS rows
 FROM default.otel_global
-GROUP BY dc_name
-ORDER BY dc_name;
+GROUP BY Region
+ORDER BY Region;
 ```
 
 **Single-DC read with shard pruning (touches only MUC's shard):**
 ```sql
 SELECT *
 FROM default.otel_global
-WHERE dc_name = 'MUC'
+WHERE Region = 'MUC'
 ORDER BY event_time DESC
 LIMIT 100
 SETTINGS optimize_skip_unused_shards = 1;
@@ -344,9 +344,9 @@ SETTINGS optimize_skip_unused_shards = 1;
 
 **Multi-DC read with shard pruning (skips FRA):**
 ```sql
-SELECT dc_name, count() AS errors
+SELECT Region, count() AS errors
 FROM default.otel_global
-WHERE dc_name IN ('MUC', 'HAM')
+WHERE Region IN ('MUC', 'HAM')
   AND event_time >= now() - toIntervalHour(1)
 GROUP BY ALL
 ORDER BY ALL ASC
@@ -368,14 +368,14 @@ SETTINGS optimize_skip_unused_shards = 1;
 -- EXPLAIN PIPELINE shows the actual execution path; EXPLAIN shows the logical
 -- plan which looks identical with or without pruning.
 EXPLAIN PIPELINE SELECT * FROM default.otel_global
-WHERE dc_name = 'HAM'
+WHERE Region = 'HAM'
 SETTINGS optimize_skip_unused_shards = 1;
 -- FRA (local): ReadFromMergeTree  → local read, zero network hop
 -- MUC/HAM:     ReadFromRemote     → goes to the matching DC's NodePort
--- With dc_name = 'HAM' + pruning: only ReadFromRemote (FRA and MUC not contacted)
+-- With Region = 'HAM' + pruning: only ReadFromRemote (FRA and MUC not contacted)
 ```
 
-> **`!=` predicates do not prune.** `WHERE dc_name != 'FRA'` always fans out
+> **`!=` predicates do not prune.** `WHERE Region != 'FRA'` always fans out
 > to all 3 shards. Use `IN ('MUC', 'HAM')` when you need pruning.
 
 **Verify RBAC (both should fail with Code 497 - writes only allowed on otel_local):**
@@ -385,7 +385,7 @@ INSERT INTO default.otel_regional (id, event_time, payload)
 VALUES (9999, now(), 'should be rejected');
 -- Expected: Code: 497. DB::Exception: Not enough privileges
 
-INSERT INTO default.otel_global (id, event_time, payload, dc_name)
+INSERT INTO default.otel_global (id, event_time, payload, Region)
 VALUES (9999, now(), 'should be rejected', 'FRA');
 -- Expected: Code: 497. DB::Exception: Not enough privileges
 ```
@@ -472,9 +472,9 @@ patch step overwrites with current IPs.
 
 **Dictionary-driven shard mapping**
 ```sql
-dictGet('default.regionToShard', 'shardID', tuple(dc_name))
+dictGet('default.regionToShard', 'shardID', tuple(Region))
 ```
-The `otel_global` sharding key maps `dc_name` → 0-based shard number via
+The `otel_global` sharding key maps `Region` → 0-based shard number via
 the `default.regionToShard` dictionary instead of a hardcoded `transform()`.
 The dictionary reads `shard_name` and `shard_num` from `system.clusters` for
 the `global` cluster, so the mapping is derived from the live cluster
@@ -488,10 +488,10 @@ WHERE name = 'global'
 
 For this to work, each `<shard>` in `global` must carry a `<name>`
 (FRA/MUC/HAM) — set in `global_remote_servers.xml` and injected by
-`patch-federation.sh` — and those names must match the `dc_name` column
+`patch-federation.sh` — and those names must match the `Region` column
 values. `shard_num` is 1-based, hence `shard_num - 1` for the 0-based shard
 convention. The dictionary uses `COMPLEX_KEY_HASHED` (its key is a `String`),
-so the lookup key must be a tuple: `tuple(dc_name)`. It refreshes every
+so the lookup key must be a tuple: `tuple(Region)`. It refreshes every
 `MAX 300` seconds, so topology changes propagate without recreating the table.
 
 > The dictionary must exist **before** `otel_global` is created — the
