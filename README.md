@@ -373,27 +373,6 @@ SETTINGS optimize_skip_unused_shards = 1;
 -- With dc_name = 'HAM' + pruning: only ReadFromRemote (FRA and MUC not contacted)
 ```
 
-**Alternatively, verify pruning via `system.query_log`:**
-```sql
--- Run the query first, then flush and inspect read_rows.
--- A pruned single-DC query reads fewer rows than a full 3-DC scan.
-SELECT * FROM default.dist_test_global
-WHERE dc_name = 'HAM'
-SETTINGS optimize_skip_unused_shards = 1;
-
-SYSTEM FLUSH LOGS;
-
-SELECT read_rows, left(query, 120) AS q
-FROM system.query_log
-WHERE query LIKE '%dist_test_global%dc_name%'
-  AND type = 'QueryFinish'
-  AND event_time >= now() - toIntervalMinute(2)
-ORDER BY event_time DESC
-LIMIT 3;
--- Pruned query: read_rows = rows on HAM only (FRA + MUC not contacted)
--- Unpruned query (no SETTINGS): read_rows is higher because all 3 shards are scanned
-```
-
 > **`!=` predicates do not prune.** `WHERE dc_name != 'FRA'` always fans out
 > to all 3 shards. Use `IN ('MUC', 'HAM')` when you need pruning.
 
