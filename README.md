@@ -1,9 +1,9 @@
-# ClickHouse Multi-DC Federation
+# ClickHouse Multi-Region Federation
 
-- Three independent ClickHouse clusters - one per DC (FRA, MUC, HAM) on Kubernetes deployed
+- Three independent ClickHouse clusters - one per region (FRA, MUC, HAM) on Kubernetes deployed
 with CLickHouse Operator.
-- Cross-DC access is via query-level federation only; no replication or Raft ever
-crosses a DC boundary.
+- Cross-region access is via query-level federation only; no replication or Raft ever
+crosses a region boundary.
 - All intra-cluster traffic is fully encrypted.
 
 ---
@@ -22,10 +22,10 @@ crosses a DC boundary.
 10. [Design notes](#design-notes)
     - [Three separate kind clusters](#three-separate-kind-clusters)
     - [Single-node Keeper](#single-node-keeper-with-localhost-raft-hostname)
-    - [Single replica per DC](#single-replica-per-dc)
+    - [Single replica per region](#single-replica-per-region)
     - [Dynamic federation patching](#dynamic-federation-patching)
     - [Shard pruning and optimize_skip_unused_shards](#shard-pruning-and-optimize_skip_unused_shards)
-    - [TLS for cross-DC communication](#tls-for-cross-dc-communication)
+    - [TLS for cross-region communication](#tls-for-cross-region-communication)
     - [Stale Keeper digest after pod restart](#stale-keeper-digest-after-pod-restart)
 
 ---
@@ -34,15 +34,15 @@ crosses a DC boundary.
 
 ![Deployment architecture](images/deployment.jpg)
 
-All three kind clusters share the Docker/Podman `kind` network. Cross-DC
+All three kind clusters share the Docker/Podman `kind` network. Cross-region
 queries route from a CH pod through its node (via kube-proxy masquerade) to
-the target DC's NodePort. The `global` remote_servers config is patched
+the target region's NodePort. The `global` remote_servers config is patched
 with real node IPs after clusters are up.
 
 **Host port mapping:**
 
-| DC  | HTTP            | Native TCP      | Native TCP (TLS) |
-|-----|-----------------|-----------------|------------------|
+| Region | HTTP            | Native TCP      | Native TCP (TLS) |
+|--------|-----------------|-----------------|------------------|
 | FRA | localhost:8801  | localhost:9801  | localhost:9841   |
 | MUC | localhost:8802  | localhost:9802  | localhost:9842   |
 | HAM | localhost:8803  | localhost:9803  | localhost:9843   |
@@ -55,9 +55,9 @@ with real node IPs after clusters are up.
 
 | Tier | Table | Engine | Scope |
 |------|-------|--------|-------|
-| 1 | `otel_local` | `ReplicatedMergeTree` | Physical data, per-DC - **all writes land here** |
-| 2 | `otel_regional` | `Distributed('default', …)` | Read fan-out within one DC |
-| 3 | `otel_global` | `Distributed('global', …)` | Read fan-out across all 3 DCs |
+| 1 | `otel_local` | `ReplicatedMergeTree` | Physical data, per-region - **all writes land here** |
+| 2 | `otel_regional` | `Distributed('default', …)` | Read fan-out within one region |
+| 3 | `otel_global` | `Distributed('global', …)` | Read fan-out across all 3 regions |
 
 **RBAC roles:**
 
@@ -99,7 +99,7 @@ All writes go directly to the local `otel_local` MergeTree. Writers can never
 ├── manifests/
 │   ├── global_remote_servers.xml           # Reference config (production FQDNs)
 │   ├── fra/
-│   │   ├── kind.yaml                              # kind cluster: clickhouse-multi-dc-federation-demo-fra
+│   │   ├── kind.yaml                              # kind cluster: clickhouse-multi-region-federation-demo-fra
 │   │   ├── 00-namespace.yaml
 │   │   └── 01-clickhouse-crs.yaml                 # KeeperCluster + ClickHouseCluster CRs + NodePort service
 │   ├── muc/  (same)
@@ -109,7 +109,7 @@ All writes go directly to the local `otel_local` MergeTree. Writers can never
     ├── patch-federation.sh                        # Discovers node IPs, injects global
     ├── setup-tls.sh                               # Generates certs, secrets, patches CRs for TLS
     ├── apply-schemas.sh                           # SQL from schemas folder in correct order
-    └── verify.sh                                  # Inserts + cross-DC queries + RBAC check
+    └── verify.sh                                  # Inserts + cross-region queries + RBAC check
 ```
 
 ---
@@ -138,7 +138,7 @@ helm version
 
 ```bash
 # Clone / cd into the repo root
-cd /path/to/clickhouse-multi-dc-federation
+cd /path/to/clickhouse-multi-region-federation
 
 # Full setup
 bash setup.sh
@@ -167,7 +167,7 @@ Verifies `kind`, `kubectl`, and `helm` are on `$PATH`, then calls
 `detect_runtime()` which tries Docker first, then Podman.
 
 ### 2. Create 3 kind clusters
-Creates one cluster per DC from the per-DC config files:
+Creates one cluster per region from the per-region config files:
 
 ```bash
 kind create cluster --config manifests/fra/kind.yaml   # FRA
@@ -180,20 +180,20 @@ The demo uses NodePorts to expose the ClickHouse cluster to the host.
 Creates namespace `fra`, `muc`, or `ham` inside each respective cluster.
 
 ### 4. Deploy KeeperCluster + ClickHouseCluster CRs
-Applies `manifests/{dc}/01-clickhouse-crs.yaml` to each cluster. The operator
+Applies `manifests/{region}/01-clickhouse-crs.yaml` to each cluster. The operator
 reconciles the CRs and creates:
 
-- A **KeeperCluster** (`{dc}-keeper`): single-node Keeper pod
-  (`{dc}-keeper-0-0`) with headless service `{dc}-keeper-headless`.
-- A **ClickHouseCluster** (`{dc}`): single shard, single replica CH pod
-  (`{dc}-clickhouse-0-0-0`) with headless service `{dc}-clickhouse-headless`.
+- A **KeeperCluster** (`{region}-keeper`): single-node Keeper pod
+  (`{region}-keeper-0-0`) with headless service `{region}-keeper-headless`.
+- A **ClickHouseCluster** (`{region}`): single shard, single replica CH pod
+  (`{region}-clickhouse-0-0-0`) with headless service `{region}-clickhouse-headless`.
 
 The NodePort service (HTTP 8123, TCP 9001, TLS 9440) is included in the same
 file and applied in the same step.
 
 ### 5. Patch global (`patch-federation.sh`)
 Discovers the InternalIP of each cluster's kind node and patches the
-`ClickHouseCluster` CR on each DC with a `global` remote_servers block
+`ClickHouseCluster` CR on each region with a `global` remote_servers block
 using those IPs and NodePorts:
 
 ```
@@ -202,26 +202,26 @@ MUC node IP: 172.18.0.3  → shard 1 in global (localhost:9001 for MUC, NodePort
 HAM node IP: 172.18.0.4  → shard 2 in global (localhost:9001 for HAM, NodePort for others)
 ```
 
-Each DC uses `localhost:9001` for its own shard so ClickHouse marks it
+Each region uses `localhost:9001` for its own shard so ClickHouse marks it
 `is_local=1` and reads locally instead of going through a network hop.
 
 ### 8. TLS setup (`setup-tls.sh`)
 Runs `scripts/setup-tls.sh` which generates certs, creates K8s Secrets,
 adds the `tcp-secure` NodePorts, patches all three `ClickHouseCluster` CRs,
 and restarts pods if needed. See
-[Design notes → TLS](#tls-for-cross-dc-communication) for details.
+[Design notes → TLS](#tls-for-cross-region-communication) for details.
 
 One CA shared among all clusters.
 
 ### 9. Schema deployment
-Runs `scripts/apply-schemas.sh` with `--context kind-clickhouse-multi-dc-federation-demo-{dc}` for each DC:
+Runs `scripts/apply-schemas.sh` with `--context kind-clickhouse-multi-region-federation-demo-{region}` for each region:
 
 ```
-Tier 1 (per DC): 01_tier1_local/{dc}_otel_local.sql
-Tier 2 (per DC): 02_tier2_regional/{dc}_otel_regional.sql
-Tier 3 (per DC): 03_tier3_global/dict_regionToShard.sql      ← sharding-key dict, before the table
-Tier 3 (per DC): 03_tier3_global/{dc}_otel_global.sql   ← needs Tier 1 in all DCs first
-RBAC  (per DC):  04_rbac/roles_and_grants.sql
+Tier 1 (per region): 01_tier1_local/{region}_otel_local.sql
+Tier 2 (per region): 02_tier2_regional/{region}_otel_regional.sql
+Tier 3 (per region): 03_tier3_global/dict_regionToShard.sql      ← sharding-key dict, before the table
+Tier 3 (per region): 03_tier3_global/{region}_otel_global.sql   ← needs Tier 1 in all regions first
+RBAC  (per region):  04_rbac/roles_and_grants.sql
 ```
 
 ---
@@ -279,20 +279,20 @@ curl http://localhost:8801/ping   # health check
 curl http://localhost:8802/ping
 curl http://localhost:8803/ping
 
-# Cross-DC row count
+# Cross-region row count
 curl 'http://localhost:8801/?query=SELECT+region,count()+FROM+default.otel_global+GROUP+BY+region+ORDER+BY+region'
 ```
 
 ### Via kubectl exec
 
 ```bash
-kubectl exec --context kind-clickhouse-multi-dc-federation-demo-fra \
+kubectl exec --context kind-clickhouse-multi-region-federation-demo-fra \
   -n fra fra-clickhouse-0-0-0 -- clickhouse client --query "SELECT 1"
 ```
 
 ### Common queries
 
-**Insert into a DC (local MergeTree only - never a Distributed table):**
+**Insert into a region (local MergeTree only - never a Distributed table):**
 ```sql
 -- Connect to MUC (localhost:9802), then:
 -- All writes target the local ReplicatedMergeTree directly.
@@ -300,13 +300,13 @@ INSERT INTO default.otel_local (id, event_time, payload)
 VALUES (100, now(), 'hello from MUC');
 ```
 
-**Read from one DC:**
+**Read from one region:**
 ```sql
--- Reads still go through the regional Distributed table (fan-out within the DC).
+-- Reads still go through the regional Distributed table (fan-out within the region).
 SELECT * FROM default.otel_regional ORDER BY event_time DESC LIMIT 20;
 ```
 
-**Cross-DC aggregation:**
+**Cross-region aggregation:**
 ```sql
 SELECT region, count() AS rows
 FROM default.otel_global
@@ -314,7 +314,7 @@ GROUP BY region
 ORDER BY region;
 ```
 
-**Single-DC read with shard pruning (touches only MUC's shard):**
+**Single-region read with shard pruning (touches only MUC's shard):**
 ```sql
 SELECT *
 FROM default.otel_global
@@ -324,7 +324,7 @@ LIMIT 100
 SETTINGS optimize_skip_unused_shards = 1;
 ```
 
-**Multi-DC read with shard pruning (skips FRA):**
+**Multi-region read with shard pruning (skips FRA):**
 ```sql
 SELECT region, count() AS errors
 FROM default.otel_global
@@ -336,7 +336,7 @@ SETTINGS optimize_skip_unused_shards = 1;
 ```
 
 > **`optimize_skip_unused_shards` must be explicit.**
-> Without this setting every query fans out to all three DC shards regardless
+> Without this setting every query fans out to all three region shards regardless
 > of the WHERE clause. Add it to individual queries, or set it once as a
 > per-user default so application code never needs to carry it:
 > ```sql
@@ -353,7 +353,7 @@ EXPLAIN PIPELINE SELECT * FROM default.otel_global
 WHERE region = 'HAM'
 SETTINGS optimize_skip_unused_shards = 1;
 -- FRA (local): ReadFromMergeTree  → local read, zero network hop
--- MUC/HAM:     ReadFromRemote     → goes to the matching DC's NodePort
+-- MUC/HAM:     ReadFromRemote     → goes to the matching region's NodePort
 -- With region = 'HAM' + pruning: only ReadFromRemote (FRA and MUC not contacted)
 ```
 
@@ -383,7 +383,7 @@ FROM system.clusters
 ORDER BY cluster, shard_num, replica_num;
 ```
 
-**Cross-DC federation shard health:**
+**Cross-region federation shard health:**
 ```sql
 SELECT shard_num, host_name, port, is_local, errors_count, estimated_recovery_time
 FROM system.clusters
@@ -391,7 +391,7 @@ WHERE cluster = 'global'
 ORDER BY shard_num;
 -- errors_count > 0 means the remote shard is unreachable
 -- is_local = 0 for all three: NodePort IPs never match the local FQDN,
--- so ClickHouse always treats the local DC's own shard as remote too
+-- so ClickHouse always treats the local region's own shard as remote too
 ```
 
 **Replica health for local tables:**
@@ -427,22 +427,22 @@ nothing remains on disk.
 ## Design notes
 
 ### Three separate kind clusters
-Each DC runs in its own kind cluster, giving fully independent Kubernetes API
-servers, CNI networks, and Keeper ensembles - closer to real DC isolation than
+Each region runs in its own kind cluster, giving fully independent Kubernetes API
+servers, CNI networks, and Keeper ensembles - closer to real region isolation than
 a single cluster with three namespaces. Cross-cluster communication uses
 NodePort services on the shared Docker/Podman `kind` network; no MetalLB or
 manual routing is required because kind places all cluster nodes on the same
 bridge network by default.
 
 ### Single-node Keeper with `localhost` raft hostname
-Each DC uses a one-node Keeper. The `raft_configuration` uses `hostname:
+Each region uses a one-node Keeper. The `raft_configuration` uses `hostname:
 localhost` to avoid a DNS bootstrap race (the pod's own headless-service DNS
 entry isn't available until after the pod starts). For production, use a
 3-node ensemble and replace `localhost` with each node's FQDN.
 
-### Single replica per DC
+### Single replica per region
 `replicaCount: 1` means `ReplicatedMergeTree` behaves like `MergeTree` - no
-intra-DC replication. Increment `replicaCount` in `values.yaml` and re-run
+intra-region replication. Increment `replicaCount` in `values.yaml` and re-run
 `helm upgrade` to add replicas.
 
 ### Dynamic federation patching
@@ -482,7 +482,7 @@ so the lookup key must be a tuple: `tuple(region)`. It refreshes every
 
 ### Shard pruning and `optimize_skip_unused_shards`
 Without this setting ClickHouse fans out every `otel_global` query to all
-three DC shards and applies the WHERE filter only after receiving results.
+three region shards and applies the WHERE filter only after receiving results.
 The setting must be explicitly enabled; there are three ways to do it:
 
 | Option | How | Scope |
@@ -503,7 +503,7 @@ The setting must be explicitly enabled; there are three ways to do it:
 >   }}}
 > }'
 > ```
-> This is already applied in the demo - all three DCs have the setting active.
+> This is already applied in the demo - all three regions have the setting active.
 
 The role-level `ALTER ROLE` is included in `schemas/04_rbac/roles_and_grants.sql`
 and is applied automatically by `apply-schemas.sh`. The server profile approach
@@ -516,19 +516,19 @@ identical regardless of the setting. `EXPLAIN PIPELINE` shows the physical
 plan: a pruned local query shows `ReadFromMergeTree`; a pruned remote-only
 query shows `ReadFromRemote`; an unpruned query shows `Union` of both.
 Alternatively, run `SYSTEM FLUSH LOGS` then check `system.query_log.read_rows`
-- a pruned single-DC query reads fewer rows than an unpruned full-scan of the
+- a pruned single-region query reads fewer rows than an unpruned full-scan of the
 same data.
 
-### TLS for cross-DC communication
+### TLS for cross-region communication
 `scripts/setup-tls.sh` adds mutual TLS to all CH-to-CH federation traffic.
 It is called automatically by `setup.sh`.
 
 What it does:
 
 1. Generates a self-signed CA (`/tmp/clickhouse-tls/ca.{key,crt}`).
-2. Generates a per-DC server certificate with SANs covering the pod FQDN,
+2. Generates a per-region server certificate with SANs covering the pod FQDN,
    headless-service FQDN, `localhost`, and the kind node IP.
-3. Stores certs as K8s Secrets (`clickhouse-tls`) in each DC namespace.
+3. Stores certs as K8s Secrets (`clickhouse-tls`) in each region namespace.
 4. Applies updated NodePort services that expose `tcp_port_secure: 9440` as
    NodePort 30941/30942/30943.
 5. Patches each `ClickHouseCluster` CR to mount the secret and add:

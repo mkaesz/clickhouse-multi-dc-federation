@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Deletes all three kind clusters for the multi-DC federation demo.
+# Deletes all three kind clusters for the multi-region federation demo.
 # Run from anywhere: bash demo/teardown.sh
 
 set -euo pipefail
@@ -13,7 +13,7 @@ else
 fi
 
 for dc in fra muc ham; do
-    cluster="clickhouse-multi-dc-federation-demo-${dc}"
+    cluster="clickhouse-multi-region-federation-demo-${dc}"
     echo "Deleting kind cluster '$cluster' ..."
     kind delete cluster --name "$cluster" 2>/dev/null || echo "  (not found, skipping)"
 done

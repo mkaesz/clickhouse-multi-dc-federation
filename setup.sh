@@ -13,9 +13,9 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MANIFESTS="$SCRIPT_DIR/manifests"
 
-FRA_CTX="kind-clickhouse-multi-dc-federation-demo-fra"
-MUC_CTX="kind-clickhouse-multi-dc-federation-demo-muc"
-HAM_CTX="kind-clickhouse-multi-dc-federation-demo-ham"
+FRA_CTX="kind-clickhouse-multi-region-federation-demo-fra"
+MUC_CTX="kind-clickhouse-multi-region-federation-demo-muc"
+HAM_CTX="kind-clickhouse-multi-region-federation-demo-ham"
 
 OPERATOR_NS="clickhouse-operator-system"
 
@@ -64,7 +64,7 @@ wait_for_pods() {
 create_clusters() {
     log "Creating kind clusters (one per DC)"
     for dc in fra muc ham; do
-        local cluster_name="clickhouse-multi-dc-federation-demo-${dc}"
+        local cluster_name="clickhouse-multi-region-federation-demo-${dc}"
         if kind get clusters 2>/dev/null | grep -q "^${cluster_name}$"; then
             info "Cluster '$cluster_name' already exists, skipping"
         else
@@ -75,7 +75,7 @@ create_clusters() {
 
     info "Cluster contexts:"
     for dc in fra muc ham; do
-        kubectl cluster-info --context "kind-clickhouse-multi-dc-federation-demo-${dc}" 2>/dev/null \
+        kubectl cluster-info --context "kind-clickhouse-multi-region-federation-demo-${dc}" 2>/dev/null \
             | head -1 | sed 's/^/    /'
     done
 }
@@ -96,7 +96,7 @@ install_operator() {
     log "Installing ClickHouse operator (webhooks disabled)"
 
     for dc in fra muc ham; do
-        local ctx="kind-clickhouse-multi-dc-federation-demo-${dc}"
+        local ctx="kind-clickhouse-multi-region-federation-demo-${dc}"
         if helm status clickhouse-operator --kube-context "$ctx" -n "$OPERATOR_NS" &>/dev/null; then
             info "Operator already installed in $dc, skipping"
         else

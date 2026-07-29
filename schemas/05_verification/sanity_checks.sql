@@ -10,7 +10,7 @@ WHERE region = 'MUC'
 SETTINGS optimize_skip_unused_shards = 1;
 -- Expect: only 1 shard referenced in the plan.
 
--- 3. Confirm shard pruning works for a multi-DC IN(...) read.
+-- 3. Confirm shard pruning works for a multi-region IN(...) read.
 EXPLAIN SELECT * FROM default.otel_global
 WHERE region IN ('MUC', 'HAM')
 SETTINGS optimize_skip_unused_shards = 1;

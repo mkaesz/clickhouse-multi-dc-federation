@@ -8,9 +8,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 SCHEMAS="$REPO_ROOT/schemas"
 
-FRA_CTX="kind-clickhouse-multi-dc-federation-demo-fra"
-MUC_CTX="kind-clickhouse-multi-dc-federation-demo-muc"
-HAM_CTX="kind-clickhouse-multi-dc-federation-demo-ham"
+FRA_CTX="kind-clickhouse-multi-region-federation-demo-fra"
+MUC_CTX="kind-clickhouse-multi-region-federation-demo-muc"
+HAM_CTX="kind-clickhouse-multi-region-federation-demo-ham"
 
 log()  { echo ""; echo "▶  $*"; }
 info() { echo "   $*"; }
