@@ -51,12 +51,12 @@ crosses a DC boundary.
 │  NodePort 30801 (HTTP)   │   │  NodePort 30802 (HTTP)   │   │  NodePort 30803 (HTTP)   │
 └──────────────────────────┘   └──────────────────────────┘   └──────────────────────────┘
          │                                  │                                  │
-         └──────────── federated_dcs: node-IP:NodePort cross-cluster TCP ──────┘
+         └──────────── global: node-IP:NodePort cross-cluster TCP ──────┘
 ```
 
 All three kind clusters share the Docker/Podman `kind` network. Cross-DC
 queries route from a CH pod through its node (via kube-proxy masquerade) to
-the target DC's NodePort. The `federated_dcs` remote_servers config is patched
+the target DC's NodePort. The `global` remote_servers config is patched
 with real node IPs after clusters are up.
 
 **Host port mapping:**
@@ -73,19 +73,19 @@ with real node IPs after clusters are up.
 
 | Tier | Table | Engine | Scope |
 |------|-------|--------|-------|
-| 1 | `test_local` | `ReplicatedMergeTree` | Physical data, per-DC - **all writes land here** |
-| 2 | `dist_test_regional` | `Distributed('{dc}_local', …)` | Read fan-out within one DC |
-| 3 | `dist_test_global` | `Distributed('federated_dcs', …)` | Read fan-out across all 3 DCs |
+| 1 | `otel_local` | `ReplicatedMergeTree` | Physical data, per-DC - **all writes land here** |
+| 2 | `otel_regional` | `Distributed('default', …)` | Read fan-out within one DC |
+| 3 | `otel_global` | `Distributed('global', …)` | Read fan-out across all 3 DCs |
 
 **RBAC roles:**
 
 | Role | Permissions |
 |------|-------------|
-| `app_writer` | `INSERT, SELECT` on `test_local`; `SELECT` on `dist_test_regional` |
-| `app_reader` | `SELECT` on `dist_test_global` and `dist_test_regional` |
+| `app_writer` | `INSERT, SELECT` on `otel_local`; `SELECT` on `otel_regional` |
+| `app_reader` | `SELECT` on `otel_global` and `otel_regional` |
 
-All writes go directly to the local `test_local` MergeTree. Writers can never
-`INSERT` into a `Distributed` table (`dist_test_regional` or `dist_test_global`)
+All writes go directly to the local `otel_local` MergeTree. Writers can never
+`INSERT` into a `Distributed` table (`otel_regional` or `otel_global`)
 - enforced by SQL `REVOKE`.
 
 ---
@@ -96,17 +96,18 @@ All writes go directly to the local `test_local` MergeTree. Writers can never
 .
 ├── schemas/
 │   ├── 01_tier1_local/
-│   │   ├── fra_test_local.sql
-│   │   ├── muc_test_local.sql
-│   │   └── ham_test_local.sql
+│   │   ├── fra_otel_local.sql
+│   │   ├── muc_otel_local.sql
+│   │   └── ham_otel_local.sql
 │   ├── 02_tier2_regional/
-│   │   ├── fra_dist_test_regional.sql
-│   │   ├── muc_dist_test_regional.sql
-│   │   └── ham_dist_test_regional.sql
+│   │   ├── fra_otel_regional.sql
+│   │   ├── muc_otel_regional.sql
+│   │   └── ham_otel_regional.sql
 │   ├── 03_tier3_global/
-│   │   ├── fra_dist_test_global.sql
-│   │   ├── muc_dist_test_global.sql
-│   │   └── ham_dist_test_global.sql
+│   │   ├── dict_regionToShard.sql                 # region→shard dict (sharding-key source)
+│   │   ├── fra_otel_global.sql
+│   │   ├── muc_otel_global.sql
+│   │   └── ham_otel_global.sql
 │   ├── 04_rbac/
 │   │   └── roles_and_grants.sql
 │   └── 05_verification/
@@ -114,7 +115,7 @@ All writes go directly to the local `test_local` MergeTree. Writers can never
 ├── setup.sh                                       # execute to setup the demo
 ├── teardown.sh                                    # execute to destroy the demo
 ├── manifests/
-│   ├── federated_dcs_remote_servers.xml           # Reference config (production FQDNs)
+│   ├── global_remote_servers.xml           # Reference config (production FQDNs)
 │   ├── fra/
 │   │   ├── kind.yaml                              # kind cluster: clickhouse-multi-dc-federation-demo-fra
 │   │   ├── 00-namespace.yaml
@@ -123,7 +124,7 @@ All writes go directly to the local `test_local` MergeTree. Writers can never
 │   └── ham/  (same)
 └── scripts/
     ├── wait-for-pods.sh
-    ├── patch-federation.sh                        # Discovers node IPs, injects federated_dcs
+    ├── patch-federation.sh                        # Discovers node IPs, injects global
     ├── setup-tls.sh                               # Generates certs, secrets, patches CRs for TLS
     ├── apply-schemas.sh                           # SQL from schemas folder in correct order
     └── verify.sh                                  # Inserts + cross-DC queries + RBAC check
@@ -208,15 +209,15 @@ reconciles the CRs and creates:
 The NodePort service (HTTP 8123, TCP 9001, TLS 9440) is included in the same
 file and applied in the same step.
 
-### 5. Patch federated_dcs (`patch-federation.sh`)
+### 5. Patch global (`patch-federation.sh`)
 Discovers the InternalIP of each cluster's kind node and patches the
-`ClickHouseCluster` CR on each DC with a `federated_dcs` remote_servers block
+`ClickHouseCluster` CR on each DC with a `global` remote_servers block
 using those IPs and NodePorts:
 
 ```
-FRA node IP: 172.18.0.2  → shard 0 in federated_dcs (localhost:9001 for FRA, NodePort for others)
-MUC node IP: 172.18.0.3  → shard 1 in federated_dcs (localhost:9001 for MUC, NodePort for others)
-HAM node IP: 172.18.0.4  → shard 2 in federated_dcs (localhost:9001 for HAM, NodePort for others)
+FRA node IP: 172.18.0.2  → shard 0 in global (localhost:9001 for FRA, NodePort for others)
+MUC node IP: 172.18.0.3  → shard 1 in global (localhost:9001 for MUC, NodePort for others)
+HAM node IP: 172.18.0.4  → shard 2 in global (localhost:9001 for HAM, NodePort for others)
 ```
 
 Each DC uses `localhost:9001` for its own shard so ClickHouse marks it
@@ -234,9 +235,10 @@ One CA shared among all clusters.
 Runs `scripts/apply-schemas.sh` with `--context kind-clickhouse-multi-dc-federation-demo-{dc}` for each DC:
 
 ```
-Tier 1 (per DC): 01_tier1_local/{dc}_test_local.sql
-Tier 2 (per DC): 02_tier2_regional/{dc}_dist_test_regional.sql
-Tier 3 (per DC): 03_tier3_global/{dc}_dist_test_global.sql   ← needs Tier 1 in all DCs first
+Tier 1 (per DC): 01_tier1_local/{dc}_otel_local.sql
+Tier 2 (per DC): 02_tier2_regional/{dc}_otel_regional.sql
+Tier 3 (per DC): 03_tier3_global/dict_regionToShard.sql      ← sharding-key dict, before the table
+Tier 3 (per DC): 03_tier3_global/{dc}_otel_global.sql   ← needs Tier 1 in all DCs first
 RBAC  (per DC):  04_rbac/roles_and_grants.sql
 ```
 
@@ -296,7 +298,7 @@ curl http://localhost:8802/ping
 curl http://localhost:8803/ping
 
 # Cross-DC row count
-curl 'http://localhost:8801/?query=SELECT+dc_name,count()+FROM+default.dist_test_global+GROUP+BY+dc_name+ORDER+BY+dc_name'
+curl 'http://localhost:8801/?query=SELECT+dc_name,count()+FROM+default.otel_global+GROUP+BY+dc_name+ORDER+BY+dc_name'
 ```
 
 ### Via kubectl exec
@@ -312,20 +314,20 @@ kubectl exec --context kind-clickhouse-multi-dc-federation-demo-fra \
 ```sql
 -- Connect to MUC (localhost:9802), then:
 -- All writes target the local ReplicatedMergeTree directly.
-INSERT INTO default.test_local (id, event_time, payload)
+INSERT INTO default.otel_local (id, event_time, payload)
 VALUES (100, now(), 'hello from MUC');
 ```
 
 **Read from one DC:**
 ```sql
 -- Reads still go through the regional Distributed table (fan-out within the DC).
-SELECT * FROM default.dist_test_regional ORDER BY event_time DESC LIMIT 20;
+SELECT * FROM default.otel_regional ORDER BY event_time DESC LIMIT 20;
 ```
 
 **Cross-DC aggregation:**
 ```sql
 SELECT dc_name, count() AS rows
-FROM default.dist_test_global
+FROM default.otel_global
 GROUP BY dc_name
 ORDER BY dc_name;
 ```
@@ -333,7 +335,7 @@ ORDER BY dc_name;
 **Single-DC read with shard pruning (touches only MUC's shard):**
 ```sql
 SELECT *
-FROM default.dist_test_global
+FROM default.otel_global
 WHERE dc_name = 'MUC'
 ORDER BY event_time DESC
 LIMIT 100
@@ -343,7 +345,7 @@ SETTINGS optimize_skip_unused_shards = 1;
 **Multi-DC read with shard pruning (skips FRA):**
 ```sql
 SELECT dc_name, count() AS errors
-FROM default.dist_test_global
+FROM default.otel_global
 WHERE dc_name IN ('MUC', 'HAM')
   AND event_time >= now() - toIntervalHour(1)
 GROUP BY ALL
@@ -365,7 +367,7 @@ SETTINGS optimize_skip_unused_shards = 1;
 ```sql
 -- EXPLAIN PIPELINE shows the actual execution path; EXPLAIN shows the logical
 -- plan which looks identical with or without pruning.
-EXPLAIN PIPELINE SELECT * FROM default.dist_test_global
+EXPLAIN PIPELINE SELECT * FROM default.otel_global
 WHERE dc_name = 'HAM'
 SETTINGS optimize_skip_unused_shards = 1;
 -- FRA (local): ReadFromMergeTree  → local read, zero network hop
@@ -376,14 +378,14 @@ SETTINGS optimize_skip_unused_shards = 1;
 > **`!=` predicates do not prune.** `WHERE dc_name != 'FRA'` always fans out
 > to all 3 shards. Use `IN ('MUC', 'HAM')` when you need pruning.
 
-**Verify RBAC (both should fail with Code 497 - writes only allowed on test_local):**
+**Verify RBAC (both should fail with Code 497 - writes only allowed on otel_local):**
 ```sql
--- Distributed tables reject writes; all inserts must target test_local.
-INSERT INTO default.dist_test_regional (id, event_time, payload)
+-- Distributed tables reject writes; all inserts must target otel_local.
+INSERT INTO default.otel_regional (id, event_time, payload)
 VALUES (9999, now(), 'should be rejected');
 -- Expected: Code: 497. DB::Exception: Not enough privileges
 
-INSERT INTO default.dist_test_global (id, event_time, payload, dc_name)
+INSERT INTO default.otel_global (id, event_time, payload, dc_name)
 VALUES (9999, now(), 'should be rejected', 'FRA');
 -- Expected: Code: 497. DB::Exception: Not enough privileges
 ```
@@ -403,7 +405,7 @@ ORDER BY cluster, shard_num, replica_num;
 ```sql
 SELECT shard_num, host_name, port, is_local, errors_count, estimated_recovery_time
 FROM system.clusters
-WHERE cluster = 'federated_dcs'
+WHERE cluster = 'global'
 ORDER BY shard_num;
 -- errors_count > 0 means the remote shard is unreachable
 -- is_local = 0 for all three: NodePort IPs never match the local FQDN,
@@ -462,22 +464,42 @@ intra-DC replication. Increment `replicaCount` in `values.yaml` and re-run
 `helm upgrade` to add replicas.
 
 ### Dynamic federation patching
-`federated_dcs` remote_servers are not in the committed `values.yaml` files
+`global` remote_servers are not in the committed `values.yaml` files
 because the kind node IPs are not known until the clusters exist.
 `patch-federation.sh` discovers IPs at runtime and injects them via
 `helm upgrade --reuse-values`. Running `setup.sh` again is idempotent: the
 patch step overwrites with current IPs.
 
-**`transform()` shard mapping**
+**Dictionary-driven shard mapping**
 ```sql
-transform(dc_name, ['FRA', 'MUC', 'HAM'], [0, 1, 2], 0)
+dictGet('default.regionToShard', 'shardID', tuple(dc_name))
 ```
-The shard order must match `federated_dcs` in `remote_servers.xml`
-(FRA=shard 0, MUC=shard 1, HAM=shard 2). Unknown `dc_name` values fall back
-to shard 0 (FRA).
+The `otel_global` sharding key maps `dc_name` → 0-based shard number via
+the `default.regionToShard` dictionary instead of a hardcoded `transform()`.
+The dictionary reads `shard_name` and `shard_num` from `system.clusters` for
+the `global` cluster, so the mapping is derived from the live cluster
+topology:
+
+```sql
+SELECT shard_name AS region, shard_num - 1 AS shardID
+FROM system.clusters
+WHERE name = 'global'
+```
+
+For this to work, each `<shard>` in `global` must carry a `<name>`
+(FRA/MUC/HAM) — set in `global_remote_servers.xml` and injected by
+`patch-federation.sh` — and those names must match the `dc_name` column
+values. `shard_num` is 1-based, hence `shard_num - 1` for the 0-based shard
+convention. The dictionary uses `COMPLEX_KEY_HASHED` (its key is a `String`),
+so the lookup key must be a tuple: `tuple(dc_name)`. It refreshes every
+`MAX 300` seconds, so topology changes propagate without recreating the table.
+
+> The dictionary must exist **before** `otel_global` is created — the
+> table's sharding key references it. `apply-schemas.sh` runs
+> `dict_regionToShard.sql` as Step 3a, immediately before the global tables.
 
 ### Shard pruning and `optimize_skip_unused_shards`
-Without this setting ClickHouse fans out every `dist_test_global` query to all
+Without this setting ClickHouse fans out every `otel_global` query to all
 three DC shards and applies the WHERE filter only after receiving results.
 The setting must be explicitly enabled; there are three ways to do it:
 
@@ -530,7 +552,7 @@ What it does:
 5. Patches each `ClickHouseCluster` CR to mount the secret and add:
    - `tcp_port_secure: 9440` in `extraConfig`
    - `openSSL.server` and `openSSL.client` blocks pointing at the mounted certs
-   - `remote_servers.federated_dcs` with `secure: 1` - local shard via
+   - `remote_servers.global` with `secure: 1` - local shard via
      `localhost:9440`, remote shards via `<nodeIP>:3094{1,2,3}`
 6. Handles stale Keeper state after pod restart (see "Stale Keeper digest" note
    below) and reapplies schemas.

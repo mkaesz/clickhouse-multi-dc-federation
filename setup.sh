@@ -146,10 +146,10 @@ wait_for_clickhouse() {
     wait_for_pods "$HAM_CTX" ham "clickhouse.com/role=clickhouse-server" 1
 }
 
-# ── Step 7: Patch federated_dcs remote_servers ────────────────────────────────
+# ── Step 7: Patch global remote_servers ────────────────────────────
 
 patch_federation() {
-    log "Patching federated_dcs remote_servers with real node IPs"
+    log "Patching global remote_servers with real node IPs"
     bash "$SCRIPT_DIR/scripts/patch-federation.sh"
 }
 
@@ -184,10 +184,10 @@ print_summary() {
     echo ""
     echo "  Cross-DC query (run from FRA):"
     echo "    clickhouse client --host localhost --port 9801 \\"
-    echo "      --query \"SELECT dc_name, count() FROM default.dist_test_global GROUP BY dc_name ORDER BY dc_name\""
+    echo "      --query \"SELECT dc_name, count() FROM default.otel_global GROUP BY dc_name ORDER BY dc_name\""
     echo ""
     echo "  HTTP smoke test:"
-    echo "    curl 'http://localhost:8801/?query=SELECT+dc_name,count()+FROM+default.dist_test_global+GROUP+BY+dc_name'"
+    echo "    curl 'http://localhost:8801/?query=SELECT+dc_name,count()+FROM+default.otel_global+GROUP+BY+dc_name'"
     echo ""
     echo "  Full verification suite:"
     echo "    bash scripts/verify.sh"

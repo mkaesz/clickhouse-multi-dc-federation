@@ -2,11 +2,11 @@
 -- Currently a no-op since MUC is a single shard today; exists so MUC can grow
 -- to multiple shards later without any application-level query changes.
 --
--- No sharding key: this table is read-only (all writes go to test_local), and
+-- No sharding key: this table is read-only (all writes go to otel_local), and
 -- reads fan out to every shard in the cluster. A sharding key would only be
 -- needed to prune shards on read (via optimize_skip_unused_shards), and would
 -- then have to be a deterministic column expression -- not rand().
 
-CREATE TABLE IF NOT EXISTS default.dist_test_regional ON CLUSTER 'default'
-AS default.test_local
-ENGINE = Distributed('default', default, test_local);
+CREATE TABLE IF NOT EXISTS default.otel_regional ON CLUSTER 'default'
+AS default.otel_local
+ENGINE = Distributed('default', default, otel_local);

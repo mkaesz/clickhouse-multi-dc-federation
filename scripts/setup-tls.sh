@@ -2,7 +2,7 @@
 # Generates a shared CA and per-DC server certificates, stores them as
 # Kubernetes Secrets, and configures each ClickHouseCluster CR to:
 #   - expose tcp_port_secure (9440) with the generated cert
-#   - use TLS for all cross-DC federated_dcs connections
+#   - use TLS for all cross-DC global connections
 #
 # Designed to run after patch-federation.sh and before apply-schemas.sh.
 # Run from the repo root: bash scripts/setup-tls.sh
@@ -123,7 +123,7 @@ done
 # One patch per DC covering:
 #   - podTemplate.volumes:         mount the TLS secret
 #   - containerTemplate.volumeMounts: expose it at /etc/clickhouse-server/certs
-#   - extraConfig:                 tcp_port_secure, openSSL, secure federated_dcs
+#   - extraConfig:                 tcp_port_secure, openSSL, secure global
 
 log "Patching ClickHouseCluster CRs with TLS config"
 
@@ -184,11 +184,11 @@ patch_tls_cr() {
           }
         },
         "remote_servers": {
-          "federated_dcs": {
+          "global": {
             "shard": [
-              {"replica": {"host": "${fra_host}", "port": ${fra_port}, "secure": 1}},
-              {"replica": {"host": "${muc_host}", "port": ${muc_port}, "secure": 1}},
-              {"replica": {"host": "${ham_host}", "port": ${ham_port}, "secure": 1}}
+              {"name": "FRA", "replica": {"host": "${fra_host}", "port": ${fra_port}, "secure": 1}},
+              {"name": "MUC", "replica": {"host": "${muc_host}", "port": ${muc_port}, "secure": 1}},
+              {"name": "HAM", "replica": {"host": "${ham_host}", "port": ${ham_port}, "secure": 1}}
             ]
           }
         }
@@ -279,13 +279,13 @@ verify_tls() {
     local remote_errors=""
     remote_errors=$(kubectl exec --context "$ctx" -n "$dc" "$pod" -- \
         clickhouse client --port 9001 \
-        --query "SELECT sum(errors_count) FROM system.clusters WHERE cluster='federated_dcs' AND is_local=0" 2>/dev/null || echo "?")
+        --query "SELECT sum(errors_count) FROM system.clusters WHERE cluster='global' AND is_local=0" 2>/dev/null || echo "?")
 
     if [ "$dc" = "fra" ]; then
         local remote_shards
         remote_shards=$(kubectl exec --context "$ctx" -n "$dc" "$pod" -- \
             clickhouse client --port 9001 \
-            --query "SELECT count() FROM system.clusters WHERE cluster='federated_dcs' AND is_local=0" 2>/dev/null || echo "?")
+            --query "SELECT count() FROM system.clusters WHERE cluster='global' AND is_local=0" 2>/dev/null || echo "?")
         info "$dc: tls=$tls_ok  remote federated shards=$remote_shards (expect 2)  remote_errors=$remote_errors"
     else
         info "$dc: tls=$tls_ok  remote_errors=$remote_errors"

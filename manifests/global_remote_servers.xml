@@ -4,25 +4,31 @@
   (e.g. via ConfigMap + volume mount on the official ClickHouse operator's
   ClickHouseCluster podTemplate/containerTemplate).
 
-  Shard order matters: it must match the transform() mapping used in the
-  Tier 3 (dist_test_global) table definitions --
-    shard 0 = FRA, shard 1 = MUC, shard 2 = HAM.
+  Shard order matters: shard_num is 1-based, so
+    shard 1 = FRA, shard 2 = MUC, shard 3 = HAM.
+  Each shard carries a <name> (FRA/MUC/HAM). This surfaces as
+  system.clusters.shard_name, which the default.regionToShard dictionary reads
+  to build the dc_name -> (shard_num - 1) sharding-key map used by
+  otel_global. The <name> values MUST match the dc_name column values.
 -->
 <clickhouse>
   <remote_servers>
-    <federated_dcs>
+    <global>
       <shard>
+        <name>FRA</name>
         <replica><host>fra-ch-0.fra.example.com</host><port>9440</port><secure>1</secure></replica>
         <replica><host>fra-ch-1.fra.example.com</host><port>9440</port><secure>1</secure></replica>
       </shard>
       <shard>
+        <name>MUC</name>
         <replica><host>muc-ch-0.muc.example.com</host><port>9440</port><secure>1</secure></replica>
         <replica><host>muc-ch-1.muc.example.com</host><port>9440</port><secure>1</secure></replica>
       </shard>
       <shard>
+        <name>HAM</name>
         <replica><host>ham-ch-0.ham.example.com</host><port>9440</port><secure>1</secure></replica>
         <replica><host>ham-ch-1.ham.example.com</host><port>9440</port><secure>1</secure></replica>
       </shard>
-    </federated_dcs>
+    </global>
   </remote_servers>
 </clickhouse>

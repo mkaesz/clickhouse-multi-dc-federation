@@ -6,24 +6,24 @@ CREATE ROLE IF NOT EXISTS app_writer;
 CREATE ROLE IF NOT EXISTS app_reader;
 
 -- Writers: local DC only. All writes go directly to the local MergeTree
--- (test_local); writers never INSERT through a Distributed table.
--- Writers never get a grant on dist_test_global.
-GRANT INSERT, SELECT ON default.test_local TO app_writer;
-GRANT SELECT ON default.dist_test_regional TO app_writer;
+-- (otel_local); writers never INSERT through a Distributed table.
+-- Writers never get a grant on otel_global.
+GRANT INSERT, SELECT ON default.otel_local TO app_writer;
+GRANT SELECT ON default.otel_regional TO app_writer;
 
 -- Readers: cross-DC fan-out queries only, no writes anywhere.
-GRANT SELECT ON default.dist_test_global TO app_reader;
-GRANT SELECT ON default.dist_test_regional TO app_reader;
+GRANT SELECT ON default.otel_global TO app_reader;
+GRANT SELECT ON default.otel_regional TO app_reader;
 
 -- Safeguard: explicitly ensure nobody can INSERT into a Distributed table,
 -- even if a future grant is added by mistake. All writes must target the
--- local MergeTree (test_local) only.
-REVOKE INSERT ON default.dist_test_regional FROM app_writer, app_reader;
-REVOKE INSERT ON default.dist_test_global FROM app_writer, app_reader;
+-- local MergeTree (otel_local) only.
+REVOKE INSERT ON default.otel_regional FROM app_writer, app_reader;
+REVOKE INSERT ON default.otel_global FROM app_writer, app_reader;
 
 -- Shard pruning: enable optimize_skip_unused_shards by default for all roles
 -- so application queries don't need to carry the SETTINGS clause.
--- Without this, every dist_test_global query fans out to all 3 DC shards
+-- Without this, every otel_global query fans out to all 3 DC shards
 -- regardless of the WHERE clause.
 ALTER ROLE app_writer SETTINGS optimize_skip_unused_shards = 1;
 ALTER ROLE app_reader SETTINGS optimize_skip_unused_shards = 1;

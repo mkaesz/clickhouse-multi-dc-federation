@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Discovers each DC's kind node IP and injects federated_dcs remote_servers
+# Discovers each DC's kind node IP and injects global remote_servers
 # into every ClickHouseCluster CR via kubectl patch, then reloads CH config.
 #
 # Cross-cluster routing: all kind clusters share the Docker/Podman "kind"
@@ -40,7 +40,7 @@ fi
 # /etc/clickhouse-server/config.d/99-extra-config.yaml.
 # ClickHouse merges this YAML with the operator-generated 00-cluster.yaml
 # (which already defines remote_servers.default for the local cluster).
-# Adding federated_dcs here creates a second remote_servers entry.
+# Adding global here creates a second remote_servers entry.
 
 patch_cr() {
     local dc="$1"
@@ -57,6 +57,9 @@ patch_cr() {
         ham) fra_host="$FRA_IP";  muc_host="$MUC_IP"; ham_host="localhost"; ham_port=9001 ;;
     esac
 
+    # Each shard carries a name (FRA/MUC/HAM). It surfaces as
+    # system.clusters.shard_name, which the default.regionToShard dictionary
+    # reads to build the dc_name -> shard-number sharding key for otel_global.
     info "Patching ClickHouseCluster/$dc in $ctx (local shard → localhost:9001)"
 
     local patch
@@ -66,11 +69,11 @@ patch_cr() {
     "settings": {
       "extraConfig": {
         "remote_servers": {
-          "federated_dcs": {
+          "global": {
             "shard": [
-              {"replica": {"host": "${fra_host}", "port": ${fra_port}}},
-              {"replica": {"host": "${muc_host}", "port": ${muc_port}}},
-              {"replica": {"host": "${ham_host}", "port": ${ham_port}}}
+              {"name": "FRA", "replica": {"host": "${fra_host}", "port": ${fra_port}}},
+              {"name": "MUC", "replica": {"host": "${muc_host}", "port": ${muc_port}}},
+              {"name": "HAM", "replica": {"host": "${ham_host}", "port": ${ham_port}}}
             ]
           }
         }
