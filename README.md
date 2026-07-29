@@ -32,27 +32,7 @@ crosses a DC boundary.
 
 ## Architecture
 
-```
-┌──────────────────────────┐   ┌──────────────────────────┐   ┌──────────────────────────┐
-│  kind cluster            │   │  kind cluster            │   │  kind cluster            │
-│  ...demo-fra             │   │  ...demo-muc             │   │  ...demo-ham             │
-│                          │   │                          │   │                          │
-│  ns: fra                 │   │  ns: muc                 │   │  ns: ham                 │
-│  ┌────────────────────┐  │   │  ┌────────────────────┐  │   │  ┌────────────────────┐  │
-│  │ fra-keeper-0-0     │  │   │  │ muc-keeper-0-0     │  │   │  │ ham-keeper-0-0     │  │
-│  │ (KeeperCluster CR) │  │   │  │ (KeeperCluster CR) │  │   │  │ (KeeperCluster CR) │  │
-│  └────────┬───────────┘  │   │  └────────┬───────────┘  │   │  └────────┬───────────┘  │
-│           │ (Keeper)     │   │           │ (Keeper)     │   │           │ (Keeper)     │
-│  ┌────────▼───────────┐  │   │  ┌────────▼───────────┐  │   │  ┌────────▼───────────┐  │
-│  │ fra-clickhouse-0-0-0│ │   │  │ muc-clickhouse-0-0-0│ │   │  │ ham-clickhouse-0-0-0│ │
-│  │ (ClickHouseCluster)│  │   │  │ (ClickHouseCluster)│  │   │  │ (ClickHouseCluster)│  │
-│  └────────────────────┘  │   │  └────────────────────┘  │   │  └────────────────────┘  │
-│  NodePort 30901 (TCP)    │   │  NodePort 30902 (TCP)    │   │  NodePort 30903 (TCP)    │
-│  NodePort 30801 (HTTP)   │   │  NodePort 30802 (HTTP)   │   │  NodePort 30803 (HTTP)   │
-└──────────────────────────┘   └──────────────────────────┘   └──────────────────────────┘
-         │                                  │                                  │
-         └──────────── global: node-IP:NodePort cross-cluster TCP ──────┘
-```
+![Deployment architecture](images/deployment.jpg)
 
 All three kind clusters share the Docker/Podman `kind` network. Cross-DC
 queries route from a CH pod through its node (via kube-proxy masquerade) to
@@ -70,6 +50,8 @@ with real node IPs after clusters are up.
 ---
 
 ## Schema tiers
+
+![Three-level table hierarchy](images/three-level_table_hierarchy.jpg)
 
 | Tier | Table | Engine | Scope |
 |------|-------|--------|-------|
