@@ -73,18 +73,20 @@ with real node IPs after clusters are up.
 
 | Tier | Table | Engine | Scope |
 |------|-------|--------|-------|
-| 1 | `test_local` | `ReplicatedMergeTree` | Physical data, per-DC |
-| 2 | `dist_test_regional` | `Distributed('{dc}_local', …)` | Fan-out within one DC |
-| 3 | `dist_test_global` | `Distributed('federated_dcs', …)` | Fan-out across all 3 DCs |
+| 1 | `test_local` | `ReplicatedMergeTree` | Physical data, per-DC - **all writes land here** |
+| 2 | `dist_test_regional` | `Distributed('{dc}_local', …)` | Read fan-out within one DC |
+| 3 | `dist_test_global` | `Distributed('federated_dcs', …)` | Read fan-out across all 3 DCs |
 
 **RBAC roles:**
 
 | Role | Permissions |
 |------|-------------|
-| `app_writer` | `INSERT, SELECT` on `dist_test_regional` and `test_local` |
+| `app_writer` | `INSERT, SELECT` on `test_local`; `SELECT` on `dist_test_regional` |
 | `app_reader` | `SELECT` on `dist_test_global` and `dist_test_regional` |
 
-Writers can never `INSERT` into `dist_test_global` - enforced by SQL `REVOKE`.
+All writes go directly to the local `test_local` MergeTree. Writers can never
+`INSERT` into a `Distributed` table (`dist_test_regional` or `dist_test_global`)
+- enforced by SQL `REVOKE`.
 
 ---
 
@@ -306,15 +308,17 @@ kubectl exec --context kind-clickhouse-multi-dc-federation-demo-fra \
 
 ### Common queries
 
-**Insert into a DC (regional table only - never the global one):**
+**Insert into a DC (local MergeTree only - never a Distributed table):**
 ```sql
 -- Connect to MUC (localhost:9802), then:
-INSERT INTO default.dist_test_regional (id, event_time, payload)
+-- All writes target the local ReplicatedMergeTree directly.
+INSERT INTO default.test_local (id, event_time, payload)
 VALUES (100, now(), 'hello from MUC');
 ```
 
 **Read from one DC:**
 ```sql
+-- Reads still go through the regional Distributed table (fan-out within the DC).
 SELECT * FROM default.dist_test_regional ORDER BY event_time DESC LIMIT 20;
 ```
 
@@ -393,8 +397,13 @@ LIMIT 3;
 > **`!=` predicates do not prune.** `WHERE dc_name != 'FRA'` always fans out
 > to all 3 shards. Use `IN ('MUC', 'HAM')` when you need pruning.
 
-**Verify RBAC (should fail with Code 497):**
+**Verify RBAC (both should fail with Code 497 - writes only allowed on test_local):**
 ```sql
+-- Distributed tables reject writes; all inserts must target test_local.
+INSERT INTO default.dist_test_regional (id, event_time, payload)
+VALUES (9999, now(), 'should be rejected');
+-- Expected: Code: 497. DB::Exception: Not enough privileges
+
 INSERT INTO default.dist_test_global (id, event_time, payload, dc_name)
 VALUES (9999, now(), 'should be rejected', 'FRA');
 -- Expected: Code: 497. DB::Exception: Not enough privileges

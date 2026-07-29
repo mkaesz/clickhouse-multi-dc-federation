@@ -34,13 +34,13 @@ run_query "$FRA_CTX" fra "$POD_FRA" "TRUNCATE TABLE default.test_local"
 run_query "$MUC_CTX" muc "$POD_MUC" "TRUNCATE TABLE default.test_local"
 run_query "$HAM_CTX" ham "$POD_HAM" "TRUNCATE TABLE default.test_local"
 
-log "Insert sample rows into each DC"
+log "Insert sample rows into each DC (writes go to the local MergeTree only)"
 run_query "$FRA_CTX" fra "$POD_FRA" \
-    "INSERT INTO default.dist_test_regional (id, event_time, payload) VALUES (1, now(), 'test from FRA')"
+    "INSERT INTO default.test_local (id, event_time, payload) VALUES (1, now(), 'test from FRA')"
 run_query "$MUC_CTX" muc "$POD_MUC" \
-    "INSERT INTO default.dist_test_regional (id, event_time, payload) VALUES (2, now(), 'test from MUC')"
+    "INSERT INTO default.test_local (id, event_time, payload) VALUES (2, now(), 'test from MUC')"
 run_query "$HAM_CTX" ham "$POD_HAM" \
-    "INSERT INTO default.dist_test_regional (id, event_time, payload) VALUES (3, now(), 'test from HAM')"
+    "INSERT INTO default.test_local (id, event_time, payload) VALUES (3, now(), 'test from HAM')"
 
 log "Verify each DC's local table has its own dc_name only"
 for pair in "fra:$FRA_CTX" "muc:$MUC_CTX" "ham:$HAM_CTX"; do
