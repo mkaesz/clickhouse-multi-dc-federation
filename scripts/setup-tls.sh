@@ -16,6 +16,15 @@ FRA_CTX="kind-clickhouse-multi-region-federation-demo-fra"
 MUC_CTX="kind-clickhouse-multi-region-federation-demo-muc"
 HAM_CTX="kind-clickhouse-multi-region-federation-demo-ham"
 
+# Shared inter-server secret for the `global` cluster (see setup.sh). This
+# script writes the AUTHORITATIVE remote_servers.global block (it overwrites
+# patch-federation.sh's), so the secret set here is the one that ends up live.
+# Inherited from the environment via setup.sh so all 3 DCs match; generated
+# here as a fallback for standalone runs. With it set, TLS encrypts the wire
+# AND the original user + grants are propagated to remote shards, so per-user
+# RBAC is enforced end to end (not silently downgraded to `default`).
+CLUSTER_SECRET="${CLICKHOUSE_CLUSTER_SECRET:-$(openssl rand -hex 32)}"
+
 log()  { echo ""; echo "▶  $*"; }
 info() { echo "   $*"; }
 
@@ -132,7 +141,9 @@ patch_tls_cr() {
     local fra_host muc_host ham_host
     local fra_port=30941 muc_port=30942 ham_port=30943
 
-    # Local DC uses loopback (is_local=1), others use NodePort IPs
+    # Local DC uses loopback (is_local=1); remote shards use the target DC's
+    # NodePort, which fronts every clickhouse-server pod in that region (the
+    # region VIP), so replica scaling needs no remote_servers change.
     case "$dc" in
         fra) fra_host="localhost"; fra_port=9440; muc_host="$MUC_IP"; ham_host="$HAM_IP" ;;
         muc) fra_host="$FRA_IP";  muc_host="localhost"; muc_port=9440; ham_host="$HAM_IP" ;;
@@ -185,6 +196,7 @@ patch_tls_cr() {
         },
         "remote_servers": {
           "global": {
+            "secret": "${CLUSTER_SECRET}",
             "shard": [
               {"name": "FRA", "replica": {"host": "${fra_host}", "port": ${fra_port}, "secure": 1}},
               {"name": "MUC", "replica": {"host": "${muc_host}", "port": ${muc_port}, "secure": 1}},

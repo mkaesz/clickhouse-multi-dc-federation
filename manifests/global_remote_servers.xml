@@ -1,8 +1,48 @@
 <!--
   Reference only -- this is infrastructure config, not SQL DDL.
-  Deploy identically to config.d/ on every node in FRA, MUC, and HAM
-  (e.g. via ConfigMap + volume mount on the official ClickHouse operator's
-  ClickHouseCluster podTemplate/containerTemplate).
+  Deploy to config.d/ on every node in FRA, MUC, and HAM (e.g. via ConfigMap +
+  volume mount on the official ClickHouse operator's ClickHouseCluster
+  podTemplate/containerTemplate). In the kind demo this same shape is injected
+  as spec.settings.extraConfig by scripts/patch-federation.sh (plaintext) and
+  scripts/setup-tls.sh (TLS); see those for the live values.
+
+  ── Region VIP per shard (not per-pod hosts) ──────────────────────────────────
+  Each shard is one region, addressed by a SINGLE endpoint that fronts every
+  ClickHouse replica in that region -- a Kubernetes Service (ClusterIP /
+  LoadBalancer) or a load-balancer hostname -- NOT an enumerated list of pod
+  hostnames. Any node in a region has otel_regional (created ON CLUSTER), so a
+  Distributed shard only needs to reach *some* node there; the VIP load-balances
+  and, in a real deployment, the operator keeps its endpoint set in sync as
+  replicas scale. Result: adding/removing REPLICAS within a region needs NO
+  change here. Only adding/removing a whole REGION (a shard) does -- and that
+  also means updating the default.regionToShard dictionary.
+  Constraint: a VIP must front exactly ONE region's nodes. Shard N must always
+  be region N or the dictGet(regionToShard, region) sharding key mispruning.
+
+  ── Keep the home-region shard on localhost ───────────────────────────────────
+  This file is therefore NOT byte-identical across nodes: on a node in region X,
+  point region X's shard at <host>localhost</host><port>9440</port> so ClickHouse
+  marks it is_local=1 and reads it via ReadFromLocal (no network hop, no TLS).
+  Routing the home region through its own VIP would work but forfeit that
+  optimization. The example below is the FRA node's copy (FRA -> localhost);
+  the MUC and HAM copies are analogous (their own region -> localhost).
+
+  ── Cluster secret (per-user RBAC across DCs) ─────────────────────────────────
+  <secret> turns on ClickHouse's secure inter-server protocol for this cluster.
+  With it, a cross-DC query propagates the ORIGINAL user and their grants to the
+  remote shard, and the remote shard enforces that user's RBAC. WITHOUT it, the
+  remote subquery runs as the `default` user and the initiator's identity is
+  never sent -- trust then rests entirely on locking down the inter-server port.
+  The secret MUST be byte-identical on every node. Store it in a K8s Secret and
+  inject via env (<secret from_env="CH_CLUSTER_SECRET"/>) rather than committing
+  a literal; the demo scripts generate one at runtime (see setup.sh).
+  Two caveats the secret imposes (see README "Cross-region RBAC"):
+    - The propagated user is matched BY NAME, so cross-DC users must exist
+      identically on every node (schemas/04_rbac runs per DC); a missing user
+      on a remote DC resets the connection (NETWORK_ERROR: Broken pipe).
+    - ClickHouse propagates the user identity but does NOT enable its ROLES on
+      remote shards -- only privileges granted DIRECTLY to the user are enforced
+      remotely. Grant cross-DC readers directly on the user, not via a role.
 
   Shard order matters: shard_num is 1-based, so
     shard 1 = FRA, shard 2 = MUC, shard 3 = HAM.
@@ -14,20 +54,22 @@
 <clickhouse>
   <remote_servers>
     <global>
+      <!-- Propagate the querying user + grants to remote shards; inject the
+           same value on every node (from_env from a K8s Secret in production). -->
+      <secret from_env="CH_CLUSTER_SECRET"/>
       <shard>
         <name>FRA</name>
-        <replica><host>fra-ch-0.fra.example.com</host><port>9440</port><secure>1</secure></replica>
-        <replica><host>fra-ch-1.fra.example.com</host><port>9440</port><secure>1</secure></replica>
+        <!-- Home region on this (FRA) node: localhost => is_local, no TLS hop. -->
+        <replica><host>localhost</host><port>9440</port><secure>1</secure></replica>
       </shard>
       <shard>
         <name>MUC</name>
-        <replica><host>muc-ch-0.muc.example.com</host><port>9440</port><secure>1</secure></replica>
-        <replica><host>muc-ch-1.muc.example.com</host><port>9440</port><secure>1</secure></replica>
+        <!-- Region VIP: one Service/LB fronting all MUC replicas. -->
+        <replica><host>muc-clickhouse.muc.svc.cluster.local</host><port>9440</port><secure>1</secure></replica>
       </shard>
       <shard>
         <name>HAM</name>
-        <replica><host>ham-ch-0.ham.example.com</host><port>9440</port><secure>1</secure></replica>
-        <replica><host>ham-ch-1.ham.example.com</host><port>9440</port><secure>1</secure></replica>
+        <replica><host>ham-clickhouse.ham.svc.cluster.local</host><port>9440</port><secure>1</secure></replica>
       </shard>
     </global>
   </remote_servers>

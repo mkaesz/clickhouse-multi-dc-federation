@@ -180,13 +180,25 @@ assert_match "!= predicate is rejected by force pruning" "UNABLE_TO_SKIP_UNUSED_
 
 # ── 8. RBAC write-path matrix ─────────────────────────────────────────────────
 # Invariant: all writes target otel_local; both Distributed tables reject writes.
-log "RBAC: set up test users (app_writer / app_reader)"
+# Writer: role-based, local-only (writers never read cross-DC). Reader: DIRECT
+# grants on the user, created on EVERY DC -- the `global` cluster secret
+# propagates the user identity but NOT its roles, so a role-based reader would
+# fail on remote shards with ACCESS_DENIED (and a reader missing on a remote DC
+# would break the inter-server connection outright).
+log "RBAC: set up writer (role, local) + reader (direct grants, all DCs)"
 chq "$FRA_CTX" fra "$POD_FRA" "
     CREATE USER IF NOT EXISTS rbac_writer IDENTIFIED WITH no_password;
-    CREATE USER IF NOT EXISTS rbac_reader IDENTIFIED WITH no_password;
     GRANT app_writer TO rbac_writer;
-    GRANT app_reader TO rbac_reader;
 " --multiquery >/dev/null
+for dc in $DCS; do
+    ctx=$(ctx_for "$dc"); pod=$(pod_for "$dc")
+    chq "$ctx" "$dc" "$pod" "
+        CREATE USER IF NOT EXISTS rbac_reader IDENTIFIED WITH no_password;
+        GRANT SELECT ON default.otel_global   TO rbac_reader;
+        GRANT SELECT ON default.otel_regional TO rbac_reader;
+        GRANT SELECT ON default.otel_local    TO rbac_reader;
+    " --multiquery >/dev/null
+done
 
 log "RBAC: app_writer denied on Distributed tables, allowed on otel_local"
 out=$(chq "$FRA_CTX" fra "$POD_FRA" \
@@ -201,15 +213,24 @@ out=$(chq "$FRA_CTX" fra "$POD_FRA" \
     "INSERT INTO default.otel_local (id,event_time,payload) VALUES (9002, now(),'writer ok')" --user rbac_writer)
 assert_ok "app_writer allowed INSERT on otel_local" "$out"
 
-log "RBAC: app_reader is read-only"
+log "RBAC: reader is read-only"
 out=$(chq "$FRA_CTX" fra "$POD_FRA" \
     "INSERT INTO default.otel_local (id,event_time,payload) VALUES (9003, now(),'reader denied')" --user rbac_reader)
-assert_match "app_reader denied INSERT on otel_local" "Code: 497|Not enough privileges" "$out"
+assert_match "reader denied INSERT on otel_local" "Code: 497|Not enough privileges" "$out"
 
-out=$(chq "$FRA_CTX" fra "$POD_FRA" "SELECT count() FROM default.otel_global" --user rbac_reader)
-assert_ok "app_reader allowed SELECT on otel_global" "$out"
+# Cross-DC read under the reader's OWN credentials: the secret propagates
+# rbac_reader to MUC/HAM and each shard enforces its direct SELECT grants.
+# uniqExact(region)=3 proves the fan-out actually reached all 3 DCs (not just a
+# no-error local read).
+out=$(chq "$FRA_CTX" fra "$POD_FRA" "SELECT uniqExact(region) FROM default.otel_global" --user rbac_reader)
+assert_eq "reader reads all 3 regions from otel_global (cross-DC RBAC via secret)" 3 "$out"
 
-chq "$FRA_CTX" fra "$POD_FRA" "DROP USER IF EXISTS rbac_writer, rbac_reader" --multiquery >/dev/null
+chq "$FRA_CTX" fra "$POD_FRA" "DROP USER IF EXISTS rbac_writer" --multiquery >/dev/null
+# rbac_reader was created on every DC (cross-DC user), so drop it on every DC.
+for dc in $DCS; do
+    ctx=$(ctx_for "$dc"); pod=$(pod_for "$dc")
+    chq "$ctx" "$dc" "$pod" "DROP USER IF EXISTS rbac_reader" >/dev/null
+done
 # Delete only the writer-ok test row (id 9002); a TRUNCATE here would wipe FRA's
 # seed row too, leaving the cluster asymmetric (FRA empty) after every run.
 chq "$FRA_CTX" fra "$POD_FRA" "DELETE FROM default.otel_local WHERE id = 9002" >/dev/null

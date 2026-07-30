@@ -58,16 +58,24 @@ with real node IPs after clusters are up.
 | 2 | `otel_regional` | `Distributed('default', …)` | Read fan-out within one region |
 | 3 | `otel_global` | `Distributed('global', …)` | Read fan-out across all 3 regions |
 
-**RBAC roles:**
+**RBAC model:**
 
-| Role | Permissions |
-|------|-------------|
-| `app_writer` | `INSERT, SELECT` on `otel_local`; `SELECT` on `otel_regional` |
-| `app_reader` | `SELECT` on `otel_global` and `otel_regional` |
+| Principal | How granted | Permissions |
+|-----------|-------------|-------------|
+| `app_writer` (role) | role, local DC only | `INSERT, SELECT` on `otel_local`; `SELECT` on `otel_regional` |
+| reader (user) | **direct grants**, on every DC | `SELECT` on `otel_global`, `otel_regional`, **and** `otel_local` |
 
 All writes go directly to the local `otel_local` MergeTree. Writers can never
 `INSERT` into a `Distributed` table (`otel_regional` or `otel_global`)
-- enforced by SQL `REVOKE`.
+- enforced by SQL `REVOKE`. Writers never read cross-DC, so they stay
+role-based.
+
+Reading `otel_global` expands `otel_global → otel_regional → otel_local` and
+ClickHouse checks `SELECT` on **each** table on **every** shard — so a reader
+needs `SELECT` on all three, and a grant on `otel_global` alone is not enough.
+Readers are granted **directly on the user** (not via a role) because the
+`global` cluster secret does not propagate roles across DCs; see
+[Cross-region RBAC](#cross-region-rbac).
 
 ---
 
@@ -96,7 +104,7 @@ All writes go directly to the local `otel_local` MergeTree. Writers can never
 ├── setup.sh                                       # execute to setup the demo
 ├── teardown.sh                                    # execute to destroy the demo
 ├── manifests/
-│   ├── global_remote_servers.xml           # Reference config (production FQDNs)
+│   ├── global_remote_servers.xml           # Reference config (region VIPs + cluster secret)
 │   ├── fra/
 │   │   ├── kind.yaml                              # kind cluster: clickhouse-multi-region-federation-demo-fra
 │   │   ├── 00-namespace.yaml
@@ -207,7 +215,17 @@ HAM node IP: 172.18.0.4  → shard 2 in global (localhost:9001 for HAM, NodePort
 ```
 
 Each region uses `localhost:9001` for its own shard so ClickHouse marks it
-`is_local=1` and reads locally instead of going through a network hop.
+`is_local=1` and reads locally instead of going through a network hop. Each
+remote shard is a single endpoint = the target region's NodePort, which selects
+every ClickHouse pod in that region — i.e. the NodePort acts as the **region
+VIP**, so scaling replicas within a region needs no `remote_servers` change.
+(In a single- or multi-cluster production deployment, use the region's Service
+DNS or LoadBalancer hostname instead of a node IP; see
+`manifests/global_remote_servers.xml`.)
+
+The patch also sets a shared cluster `<secret>` on `global` (generated once in
+`setup.sh`, identical on all three DCs). See
+[Cross-region RBAC](#cross-region-rbac) for why.
 
 ### 8. TLS setup (`setup-tls.sh`)
 Runs `scripts/setup-tls.sh` which generates certs, creates K8s Secrets,
@@ -445,6 +463,62 @@ because the kind node IPs are not known until the clusters exist.
 `helm upgrade --reuse-values`. Running `setup.sh` again is idempotent: the
 patch step overwrites with current IPs.
 
+### Region VIP vs. per-pod hosts
+Each remote shard in `global` is a **single** endpoint that fronts every
+replica in that region, not a list of pod hostnames:
+
+- In the kind demo that endpoint is the region's **NodePort**
+  (`{region}-clickhouse-nodeport`), whose selector matches all
+  `clickhouse-server` pods in the region, so kube-proxy load-balances across
+  them. Adding or removing **replicas** within a region therefore needs no
+  `remote_servers` change; only adding/removing a whole **region** (a shard)
+  does — and that also updates `regionToShard`.
+- In production, use the region's **Service DNS or LoadBalancer hostname**
+  (see `manifests/global_remote_servers.xml`). The VIP must front exactly one
+  region's nodes: shard N must always be region N, or the
+  `dictGet(regionToShard, region)` sharding key mis-prunes.
+- The **home-region** shard stays on `localhost` on each node so it is
+  `is_local=1` (local read, no network hop, no TLS). Routing the home region
+  through its own VIP would work but forfeit that optimization.
+
+### Cross-region RBAC
+A read of `otel_global` expands down the chain
+(`otel_global → otel_regional → otel_local`) and ClickHouse checks `SELECT` on
+each table **on every shard the query touches** — so a reader needs `SELECT` on
+all three, and a grant on `otel_global` alone is not enough.
+
+Which **user** those checks run as on a *remote* shard depends on the cluster
+`<secret>`:
+
+- **Without a secret**, the initiator connects to remote shards as the
+  `default` user and the original user's identity is never sent over the wire.
+  RBAC is enforced only on the initiating node; trust on remote shards rests
+  entirely on locking down the inter-server port.
+- **With a shared `<secret>` on `global`** (what this demo configures),
+  ClickHouse uses the secure inter-server protocol and propagates the
+  **original user** to remote shards, so each shard enforces that user's RBAC.
+
+Two consequences of the secret, both verified in `scripts/verify.sh`:
+
+1. **The user must exist on every DC.** The secret propagates the user *by
+   name*; if a remote DC has no such user, the inter-server connection is reset
+   (`NETWORK_ERROR: Broken pipe`). Create cross-DC users identically on FRA,
+   MUC, and HAM (there is no cross-DC Keeper-backed access storage).
+2. **Roles do not propagate — only direct grants do.** ClickHouse forwards the
+   user identity but does **not** enable that user's roles on the remote shard,
+   so a role-granted `SELECT` yields `ACCESS_DENIED` remotely even though it
+   works locally. Grant reader privileges **directly on the user** on every DC.
+   Writers are unaffected: they only ever write to the local `otel_local` and
+   never traverse the cross-DC path, so they stay role-based (`app_writer`).
+
+This is why `schemas/04_rbac/roles_and_grants.sql` keeps `app_writer` as a role
+but provisions readers as direct-grant users. The secret itself is generated
+once in `setup.sh` and injected identically into all three `ClickHouseCluster`
+CRs by `patch-federation.sh` / `setup-tls.sh` (the TLS patch writes the
+authoritative block). Set `CLICKHOUSE_CLUSTER_SECRET` in the environment to pin
+a value; in production, source it from a K8s Secret via
+`<secret from_env="…"/>` rather than a committed literal.
+
 **Dictionary-driven shard mapping**
 ```sql
 dictGet('default.regionToShard', 'shardID', tuple(region))
@@ -496,7 +570,7 @@ Both settings are enabled by default across the demo in two places:
 | Where | Scope |
 |-------|-------|
 | `spec.settings.extraUsersConfig.profiles.default` in each ClickHouseCluster CR (`manifests/{fra,muc,ham}/01-clickhouse-crs.yaml`) | Every session, including the built-in `default` user |
-| `ALTER ROLE app_reader/app_writer SETTINGS ...` in `schemas/04_rbac/roles_and_grants.sql` | Users carrying those roles |
+| `ALTER ROLE app_writer SETTINGS ...` in `schemas/04_rbac/roles_and_grants.sql` | Users carrying the `app_writer` role (readers already covered by the profile default) |
 
 The profile block is defined directly on the `default` settings profile in
 each region's `ClickHouseCluster` CR. The operator merges `extraUsersConfig`
@@ -581,8 +655,11 @@ What it does:
 5. Patches each `ClickHouseCluster` CR to mount the secret and add:
    - `tcp_port_secure: 9440` in `extraConfig`
    - `openSSL.server` and `openSSL.client` blocks pointing at the mounted certs
-   - `remote_servers.global` with `secure: 1` - local shard via
-     `localhost:9440`, remote shards via `<nodeIP>:3094{1,2,3}`
+   - `remote_servers.global` with `secure: 1` and a shared cluster `secret`
+     (see [Cross-region RBAC](#cross-region-rbac)) - local shard via
+     `localhost:9440`, remote shards via `<nodeIP>:3094{1,2,3}`. This is the
+     authoritative `global` block; it overwrites the one from
+     `patch-federation.sh`.
 6. Handles stale Keeper state after pod restart (see "Stale Keeper digest" note
    below) and reapplies schemas.
 

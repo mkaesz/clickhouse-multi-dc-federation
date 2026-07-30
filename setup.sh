@@ -19,6 +19,15 @@ HAM_CTX="kind-clickhouse-multi-region-federation-demo-ham"
 
 OPERATOR_NS="clickhouse-operator-system"
 
+# Shared inter-server secret for the `global` cluster. When a Distributed
+# cluster carries a <secret>, ClickHouse propagates the ORIGINAL querying user
+# (and their grants) to remote shards over the secure inter-server protocol and
+# each shard enforces that user's RBAC -- instead of silently running the
+# remote subquery as the `default` user. It MUST be identical on every node, so
+# we generate it once here and export it to both patch scripts. In production,
+# source this from a K8s Secret / env var rather than generating per run.
+export CLICKHOUSE_CLUSTER_SECRET="${CLICKHOUSE_CLUSTER_SECRET:-$(openssl rand -hex 32)}"
+
 # ── helpers ────────────────────────────────────────────────────────────────────
 
 log()  { echo ""; echo "▶  $*"; }
