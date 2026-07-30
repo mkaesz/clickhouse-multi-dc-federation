@@ -12,8 +12,13 @@ GRANT INSERT, SELECT ON default.otel_local TO app_writer;
 GRANT SELECT ON default.otel_regional TO app_writer;
 
 -- Readers: cross-DC fan-out queries only, no writes anywhere.
+-- Reading otel_global fans out down the whole chain
+-- (otel_global -> otel_regional -> otel_local), and ClickHouse checks SELECT
+-- privilege on each underlying table, so the reader needs SELECT on all three
+-- -- otel_global alone is not enough.
 GRANT SELECT ON default.otel_global TO app_reader;
 GRANT SELECT ON default.otel_regional TO app_reader;
+GRANT SELECT ON default.otel_local TO app_reader;
 
 -- Safeguard: explicitly ensure nobody can INSERT into a Distributed table,
 -- even if a future grant is added by mistake. All writes must target the

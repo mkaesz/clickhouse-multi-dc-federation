@@ -27,8 +27,8 @@ assert_match() { # desc pattern output
     if echo "$3" | grep -qE "$2"; then pass "$1"; else fail "$1 (no /$2/ in: $3)"; fi
 }
 assert_ok() { # desc output   -- passes when output carries no CH error
-    if echo "$3" | grep -qiE "Code: [0-9]+|DB::Exception"; then
-        fail "$1 (unexpected error: $3)"
+    if echo "$2" | grep -qiE "Code: [0-9]+|DB::Exception"; then
+        fail "$1 (unexpected error: $2)"
     else
         pass "$1"
     fi
