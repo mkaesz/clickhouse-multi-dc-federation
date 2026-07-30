@@ -17,6 +17,32 @@ spec:
   shards: 1
   keeperClusterRef:
     name: ham
+  containerTemplate:
+    # Raise limits above the operator's 512Mi default: at 512Mi the server
+    # OOM-kills during background merges of the system log tables once a few
+    # tens of minutes of activity accumulate. 2Gi is comfortable for the demo.
+    # NOTE: resources are applied as a whole -- both requests and limits must
+    # be set here, or the operator falls back to its defaults for the lot.
+    resources:
+      requests:
+        cpu: "500m"
+        memory: 1Gi
+      limits:
+        cpu: "2"
+        memory: 2Gi
+  settings:
+    # Profile defaults applied to every session (merged into users.yaml).
+    # otel_global's sharding key is dictGet(regionToShard, ...), which
+    # ClickHouse classifies as non-deterministic (dictionaries can reload).
+    # optimize_skip_unused_shards therefore refuses to prune with it UNLESS
+    # allow_nondeterministic_optimize_skip_unused_shards is also enabled.
+    # Setting both here makes region-filtered reads prune to the target shard
+    # out of the box -- the same approach LogHouse uses as a profile default.
+    extraUsersConfig:
+      profiles:
+        default:
+          optimize_skip_unused_shards: 1
+          allow_nondeterministic_optimize_skip_unused_shards: 1
 ---
 apiVersion: v1
 kind: Service

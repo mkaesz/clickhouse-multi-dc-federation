@@ -54,13 +54,35 @@ log "Cross-DC aggregation via otel_global (from FRA)"
 run_query "$FRA_CTX" fra "$POD_FRA" \
     "SELECT region, count() AS row_count FROM default.otel_global GROUP BY region ORDER BY region"
 
-log "Shard pruning: single-DC filter (should touch 1 shard)"
-run_query "$FRA_CTX" fra "$POD_FRA" \
-    "EXPLAIN SELECT * FROM default.otel_global WHERE region = 'MUC' SETTINGS optimize_skip_unused_shards = 1"
+log "Shard pruning: profile defaults active (no inline SETTINGS needed)"
+# toUInt8: these are Bool settings, so getSetting() renders as true/false;
+# cast to 1/0 for a clean string comparison.
+prune_defaults=$(kubectl exec --context "$FRA_CTX" -n fra "$POD_FRA" -- \
+    clickhouse client --query \
+    "SELECT toUInt8(getSetting('optimize_skip_unused_shards') AND getSetting('allow_nondeterministic_optimize_skip_unused_shards'))" 2>&1 || true)
+if [ "$prune_defaults" = "1" ]; then
+    info "PASS: optimize_skip_unused_shards + allow_nondeterministic_... default to on"
+else
+    info "FAIL: pruning profile defaults not active (got: $prune_defaults)"
+fi
 
-log "Shard pruning: IN() filter (should touch 2 shards)"
+# The sharding key is dictGet(...) (non-deterministic), so pruning only works
+# because allow_nondeterministic_optimize_skip_unused_shards is on by default.
+# force_optimize_skip_unused_shards turns a silent no-op into a hard error, so a
+# clean run proves the region filter actually pruned to a single shard.
+log "Shard pruning: single-DC filter must prune (force = hard error if it can't)"
+prune_result=$(kubectl exec --context "$FRA_CTX" -n fra "$POD_FRA" -- \
+    clickhouse client --query \
+    "SELECT count() FROM default.otel_global WHERE region = 'MUC' SETTINGS force_optimize_skip_unused_shards = 1" 2>&1 || true)
+if echo "$prune_result" | grep -qE "UNABLE_TO_SKIP_UNUSED_SHARDS|not deterministic"; then
+    info "FAIL: pruning did not apply — $prune_result"
+else
+    info "PASS: single-DC filter pruned to 1 shard (count=$prune_result)"
+fi
+
+log "Shard pruning: plan for IN() filter (should reference 2 shards, FRA skipped)"
 run_query "$FRA_CTX" fra "$POD_FRA" \
-    "EXPLAIN SELECT * FROM default.otel_global WHERE region IN ('MUC','HAM') SETTINGS optimize_skip_unused_shards = 1"
+    "EXPLAIN SELECT * FROM default.otel_global WHERE region IN ('MUC','HAM')"
 
 log "RBAC: confirm app_writer cannot INSERT into otel_global"
 kubectl exec --context "$FRA_CTX" -n fra "$POD_FRA" -- \

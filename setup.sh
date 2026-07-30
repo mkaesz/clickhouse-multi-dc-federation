@@ -75,8 +75,10 @@ create_clusters() {
 
     info "Cluster contexts:"
     for dc in fra muc ham; do
+        # `|| true`: this print is cosmetic, and `head -1` closing the pipe can
+        # SIGPIPE kubectl (141), which would trip `set -o pipefail` and abort.
         kubectl cluster-info --context "kind-clickhouse-multi-region-federation-demo-${dc}" 2>/dev/null \
-            | head -1 | sed 's/^/    /'
+            | head -1 | sed 's/^/    /' || true
     done
 }
 

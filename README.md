@@ -320,8 +320,7 @@ SELECT *
 FROM default.otel_global
 WHERE region = 'MUC'
 ORDER BY event_time DESC
-LIMIT 100
-SETTINGS optimize_skip_unused_shards = 1;
+LIMIT 100;
 ```
 
 **Multi-region read with shard pruning (skips FRA):**
@@ -331,31 +330,40 @@ FROM default.otel_global
 WHERE region IN ('MUC', 'HAM')
   AND event_time >= now() - toIntervalHour(1)
 GROUP BY ALL
-ORDER BY ALL ASC
-SETTINGS optimize_skip_unused_shards = 1;
+ORDER BY ALL ASC;
 ```
 
-> **`optimize_skip_unused_shards` must be explicit.**
-> Without this setting every query fans out to all three region shards regardless
-> of the WHERE clause. Add it to individual queries, or set it once as a
-> per-user default so application code never needs to carry it:
-> ```sql
-> ALTER USER default SETTINGS optimize_skip_unused_shards = 1;
-> ```
+> **Shard pruning is on by default — no inline `SETTINGS` needed.**
+> Each CR sets `optimize_skip_unused_shards` **and**
+> `allow_nondeterministic_optimize_skip_unused_shards` on the `default`
+> profile (via `spec.settings.extraUsersConfig`), so region-filtered reads
+> automatically skip non-matching shards. Both are required: the sharding key
+> is `dictGet(...)`, which ClickHouse treats as non-deterministic, so
+> `optimize_skip_unused_shards` alone silently refuses to prune.
 > See [Design notes → Shard pruning](#shard-pruning-and-optimize_skip_unused_shards)
-> for the full explanation and all three configuration options.
+> for the full explanation.
 
 **Confirm shard pruning via EXPLAIN PIPELINE (not EXPLAIN):**
 ```sql
 -- EXPLAIN PIPELINE shows the actual execution path; EXPLAIN shows the logical
 -- plan which looks identical with or without pruning.
 EXPLAIN PIPELINE SELECT * FROM default.otel_global
-WHERE region = 'HAM'
-SETTINGS optimize_skip_unused_shards = 1;
+WHERE region = 'HAM';
 -- FRA (local): ReadFromMergeTree  → local read, zero network hop
 -- MUC/HAM:     ReadFromRemote     → goes to the matching region's NodePort
--- With region = 'HAM' + pruning: only ReadFromRemote (FRA and MUC not contacted)
+-- With region = 'HAM': only ReadFromRemote (FRA and MUC not contacted).
+-- An unpruned plan instead shows a Union with MergingSortedTransform N → 1
+-- fanning out to all 3 shards.
 ```
+
+> **Prove pruning is really active.** Because the failure mode is a *silent*
+> no-op, add `force_optimize_skip_unused_shards = 1` to turn "could not prune"
+> into a hard error:
+> ```sql
+> SELECT count() FROM default.otel_global
+> WHERE region = 'MUC'
+> SETTINGS force_optimize_skip_unused_shards = 1;   -- errors if pruning is off
+> ```
 
 > **`!=` predicates do not prune.** `WHERE region != 'FRA'` always fans out
 > to all 3 shards. Use `IN ('MUC', 'HAM')` when you need pruning.
@@ -481,43 +489,49 @@ so the lookup key must be a tuple: `tuple(region)`. It refreshes every
 > `dict_regionToShard.sql` as Step 3a, immediately before the global tables.
 
 ### Shard pruning and `optimize_skip_unused_shards`
-Without this setting ClickHouse fans out every `otel_global` query to all
-three region shards and applies the WHERE filter only after receiving results.
-The setting must be explicitly enabled; there are three ways to do it:
+Without pruning, ClickHouse fans out every `otel_global` query to all three
+region shards and applies the WHERE filter only after receiving results.
+Turning it on requires **two** settings, not one:
 
-| Option | How | Scope |
-|--------|-----|-------|
-| Per-query | `SETTINGS optimize_skip_unused_shards = 1` at end of SQL | Single query |
-| Per-role/user | `ALTER ROLE app_reader SETTINGS optimize_skip_unused_shards = 1` | All queries from users with that role |
-| Server profile | Add to **`extraUsersConfig`** in the ClickHouseCluster CR (see below) | All users on that profile |
+| Setting | Why |
+|---------|-----|
+| `optimize_skip_unused_shards = 1` | Enables shard pruning at all |
+| `allow_nondeterministic_optimize_skip_unused_shards = 1` | **Required here.** `otel_global`'s sharding key is `dictGet('default.regionToShard', ...)`, and ClickHouse classifies `dictGet` as *non-deterministic* (dictionaries can reload on their `LIFETIME`). By default pruning refuses to use a non-deterministic key, so `optimize_skip_unused_shards` alone silently no-ops — this opt-in unlocks it. |
 
-> **Note on the built-in `default` user:** this user is defined in the
-> read-only `users_xml` config and cannot be altered via SQL (`ALTER USER`
-> returns `ACCESS_STORAGE_READONLY`). Use the server profile approach instead.
-> Profile settings must go in **`extraUsersConfig`** (writes to `users.d/`),
-> not `extraConfig` (which writes to `config.d/` and is ignored for profiles):
-> ```bash
-> kubectl patch clickhousecluster fra -n fra --type merge --patch '{
->   "spec": {"settings": {"extraUsersConfig": {
->     "profiles": {"default": {"optimize_skip_unused_shards": 1}}
->   }}}
-> }'
-> ```
-> This is already applied in the demo - all three regions have the setting active.
+> **This is the single most common gotcha with dictionary-driven sharding
+> keys.** With only `optimize_skip_unused_shards = 1`, `EXPLAIN PIPELINE` still
+> shows a `Union` + `MergingSortedTransform N → 1` fanning out to all shards,
+> and no error is raised. Adding `force_optimize_skip_unused_shards = 1` in that
+> state surfaces the real reason:
+> `Code: 507 ... Sharding key is not deterministic (UNABLE_TO_SKIP_UNUSED_SHARDS)`.
+> LogHouse uses the same `dictGet` sharding key and relies on the same
+> `allow_nondeterministic_...` profile default to make pruning transparent.
 
-The role-level `ALTER ROLE` is included in `schemas/04_rbac/roles_and_grants.sql`
-and is applied automatically by `apply-schemas.sh`. The server profile approach
-is preferred for production because it applies uniformly to all users without
-relying on role assignment.
+Both settings are enabled by default across the demo in two places:
+
+| Where | Scope |
+|-------|-------|
+| `spec.settings.extraUsersConfig.profiles.default` in each ClickHouseCluster CR (`manifests/{fra,muc,ham}/01-clickhouse-crs.yaml`) | Every session, including the built-in `default` user |
+| `ALTER ROLE app_reader/app_writer SETTINGS ...` in `schemas/04_rbac/roles_and_grants.sql` | Users carrying those roles |
+
+> **Why the profile, not `ALTER USER default`?** The built-in `default` user is
+> defined in the read-only `users_xml` config and cannot be altered via SQL
+> (`ALTER USER` returns `ACCESS_STORAGE_READONLY`). Profile settings must go in
+> **`extraUsersConfig`** (merged into the users realm), *not* `extraConfig`
+> (which writes to `config.d/` and is ignored for profile settings). Both are
+> encoded in the CR manifests, so a fresh `bash setup.sh` brings all three
+> regions up with pruning already on — no manual `kubectl patch` needed.
 
 To verify pruning is working, use `EXPLAIN PIPELINE` (not `EXPLAIN`):
 `EXPLAIN` shows the logical plan before execution-time optimisation and looks
 identical regardless of the setting. `EXPLAIN PIPELINE` shows the physical
-plan: a pruned local query shows `ReadFromMergeTree`; a pruned remote-only
-query shows `ReadFromRemote`; an unpruned query shows `Union` of both.
-Alternatively, run `SYSTEM FLUSH LOGS` then check `system.query_log.read_rows`
-- a pruned single-region query reads fewer rows than an unpruned full-scan of the
-same data.
+plan: a pruned local query shows only `ReadFromMergeTree`; a pruned remote-only
+query shows only `ReadFromRemote`; an unpruned query shows a `Union` of both
+with `MergingSortedTransform N → 1`. For a hard pass/fail, add
+`force_optimize_skip_unused_shards = 1` to a `count()` — it errors if pruning
+did not apply. Alternatively, run `SYSTEM FLUSH LOGS` then check
+`system.query_log.read_rows` — a pruned single-region query reads fewer rows
+than an unpruned full-scan of the same data.
 
 ### TLS for cross-region communication
 `scripts/setup-tls.sh` adds mutual TLS to all CH-to-CH federation traffic.
