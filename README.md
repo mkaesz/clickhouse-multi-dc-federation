@@ -187,6 +187,11 @@ reconciles the CRs and creates:
   (`{region}-keeper-0-0`) with headless service `{region}-keeper-headless`.
 - A **ClickHouseCluster** (`{region}`): single shard, single replica CH pod
   (`{region}-clickhouse-0-0-0`) with headless service `{region}-clickhouse-headless`.
+  Its `spec.settings.extraUsersConfig` sets the shard-pruning defaults on the
+  `default` profile (see
+  [Shard pruning](#shard-pruning-and-optimize_skip_unused_shards)), and
+  `spec.containerTemplate.resources` raises the memory limit to 2Gi (the
+  operator's 512Mi default OOM-kills the server during system-log merges).
 
 The NodePort service (HTTP 8123, TCP 9001, TLS 9440) is included in the same
 file and applied in the same step.
@@ -513,6 +518,31 @@ Both settings are enabled by default across the demo in two places:
 |-------|-------|
 | `spec.settings.extraUsersConfig.profiles.default` in each ClickHouseCluster CR (`manifests/{fra,muc,ham}/01-clickhouse-crs.yaml`) | Every session, including the built-in `default` user |
 | `ALTER ROLE app_reader/app_writer SETTINGS ...` in `schemas/04_rbac/roles_and_grants.sql` | Users carrying those roles |
+
+The profile block is defined directly on the `default` settings profile in
+each region's `ClickHouseCluster` CR. The operator merges `extraUsersConfig`
+into the ClickHouse *users* configuration, so it applies to every session:
+
+```yaml
+# manifests/{fra,muc,ham}/01-clickhouse-crs.yaml
+spec:
+  settings:
+    extraUsersConfig:
+      profiles:
+        default:                                             # the built-in default profile
+          optimize_skip_unused_shards: 1                     # enable shard pruning
+          allow_nondeterministic_optimize_skip_unused_shards: 1  # allow it for the dictGet() key
+```
+
+You can confirm both are active in any session (they are `Bool` settings, so
+they read back as `true`):
+
+```sql
+SELECT
+    getSetting('optimize_skip_unused_shards')                        AS opt,
+    getSetting('allow_nondeterministic_optimize_skip_unused_shards') AS allow_nd;
+-- opt = true, allow_nd = true
+```
 
 > **Why the profile, not `ALTER USER default`?** The built-in `default` user is
 > defined in the read-only `users_xml` config and cannot be altered via SQL
