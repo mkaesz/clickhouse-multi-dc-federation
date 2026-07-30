@@ -486,8 +486,7 @@ Turning it on requires **two** settings, not one:
 | `optimize_skip_unused_shards = 1` | Enables shard pruning at all |
 | `allow_nondeterministic_optimize_skip_unused_shards = 1` | **Required here.** `otel_global`'s sharding key is `dictGet('default.regionToShard', ...)`, and ClickHouse classifies `dictGet` as *non-deterministic* (dictionaries can reload on their `LIFETIME`). By default pruning refuses to use a non-deterministic key, so `optimize_skip_unused_shards` alone silently no-ops — this opt-in unlocks it. |
 
-> **This is the single most common gotcha with dictionary-driven sharding
-> keys.** With only `optimize_skip_unused_shards = 1`, `EXPLAIN PIPELINE` still
+> With only `optimize_skip_unused_shards = 1`, `EXPLAIN PIPELINE` still
 > shows a `Union` + `MergingSortedTransform N → 1` fanning out to all shards,
 > and no error is raised. Adding `force_optimize_skip_unused_shards = 1` in that
 > state surfaces the real reason:
