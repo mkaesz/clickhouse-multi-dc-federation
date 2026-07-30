@@ -210,7 +210,9 @@ out=$(chq "$FRA_CTX" fra "$POD_FRA" "SELECT count() FROM default.otel_global" --
 assert_ok "app_reader allowed SELECT on otel_global" "$out"
 
 chq "$FRA_CTX" fra "$POD_FRA" "DROP USER IF EXISTS rbac_writer, rbac_reader" --multiquery >/dev/null
-chq "$FRA_CTX" fra "$POD_FRA" "TRUNCATE TABLE default.otel_local" >/dev/null  # drop the writer-ok row
+# Delete only the writer-ok test row (id 9002); a TRUNCATE here would wipe FRA's
+# seed row too, leaving the cluster asymmetric (FRA empty) after every run.
+chq "$FRA_CTX" fra "$POD_FRA" "DELETE FROM default.otel_local WHERE id = 9002" >/dev/null
 
 # ── Summary ───────────────────────────────────────────────────────────────────
 log "Verification complete: $PASS passed, $FAIL failed"
