@@ -415,9 +415,6 @@ bash teardown.sh
 
 Deletes all three kind clusters.
 
-All Helm releases, namespaces, and data are gone. No persistent storage, so
-nothing remains on disk.
-
 ---
 
 ## Design notes
