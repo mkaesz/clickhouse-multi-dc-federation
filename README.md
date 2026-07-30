@@ -16,10 +16,9 @@ crosses a region boundary.
 4. [Prerequisites](#prerequisites)
 5. [Quick start](#quick-start)
 6. [What setup.sh does](#what-setupsh-does)
-7. [Verifying pod naming](#verifying-pod-naming)
-8. [Running queries](#running-queries)
-9. [Teardown](#teardown)
-10. [Design notes](#design-notes)
+7. [Running queries](#running-queries)
+8. [Teardown](#teardown)
+9. [Design notes](#design-notes)
     - [Three separate kind clusters](#three-separate-kind-clusters)
     - [Single-node Keeper](#single-node-keeper-with-localhost-raft-hostname)
     - [Single replica per region](#single-replica-per-region)
@@ -228,22 +227,6 @@ Tier 3 (per region): 03_tier3_global/dict_regionToShard.sql      ← sharding-ke
 Tier 3 (per region): 03_tier3_global/{region}_otel_global.sql   ← needs Tier 1 in all regions first
 RBAC  (per region):  04_rbac/roles_and_grants.sql
 ```
-
----
-
-## Verifying pod naming
-
-The operator derives names from the CR name (`fra`, `muc`, `ham`):
-
-| Object | Expected name (FRA example) |
-|--------|------------------------------|
-| CH StatefulSet | `fra-clickhouse-0-0` |
-| CH Pod | `fra-clickhouse-0-0-0` |
-| CH headless service | `fra-clickhouse-headless` |
-| CH Pod FQDN (in-cluster) | `fra-clickhouse-0-0-0.fra-clickhouse-headless.fra.svc.cluster.local` |
-| Keeper Pod | `fra-keeper-0-0` |
-| Keeper headless service | `fra-keeper-headless` |
-
 
 ---
 
