@@ -41,6 +41,15 @@ ch_pod() {
         -o jsonpath='{.items[0].metadata.name}' 2>/dev/null
 }
 
+# ch_pods CTX NS -> every Running clickhouse-server pod in the DC, one per line,
+# sorted (…-0-0-0, …-0-1-0, …). Used by the multi-replica tests.
+ch_pods() {
+    kubectl get pods --context "$1" -n "$2" \
+        -l "clickhouse.com/role=clickhouse-server" \
+        --field-selector=status.phase=Running \
+        -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null | sort
+}
+
 # chq CTX NS POD QUERY [extra clickhouse-client args...]
 # Always returns 0; CH errors are captured as text on stdout (for assert_match).
 chq() {
@@ -91,6 +100,18 @@ run_query "$MUC_CTX" muc "$POD_MUC" \
 run_query "$HAM_CTX" ham "$POD_HAM" \
     "INSERT INTO default.otel_local (id, event_time, payload) VALUES (3, now(), 'test from HAM')"
 
+# Seeds were inserted on one replica per DC. With >1 replica the cross-DC reads
+# below fan out through each region's NodePort VIP, which can land on the OTHER
+# replica -- so force every replica to catch up before asserting counts, or a
+# read could race replication and see a short row. Harmless on single-replica.
+log "Sync all replicas so cross-DC reads don't race replication"
+for dc in $DCS; do
+    ctx=$(ctx_for "$dc")
+    for p in $(ch_pods "$ctx" "$dc"); do
+        chq "$ctx" "$dc" "$p" "SYSTEM SYNC REPLICA default.otel_local" >/dev/null
+    done
+done
+
 # ── 3. Write isolation: each DC's local table holds only its own region ───────
 log "Write isolation: each DC's otel_local holds exactly its own region"
 for dc in $DCS; do
@@ -134,6 +155,63 @@ for dc in $DCS; do
         "SELECT count() FROM system.clusters WHERE cluster='global' AND is_local=1")
     assert_eq "$dc: 0 errors on remote federated shards" 0 "$err"
     assert_eq "$dc: exactly 1 local shard in global"     1 "$loc"
+done
+
+# ── 6b. Replica topology: each region runs a healthy 2-replica set ────────────
+# otel_local is ReplicatedMergeTree; scaling spec.replicas adds a physical
+# replica that Keeper keeps in sync. This is the precondition for the VIP tests
+# below: the region's NodePort load-balances reads across exactly these pods.
+log "Replica topology: 2 in-sync replicas of otel_local per region"
+for dc in $DCS; do
+    ctx=$(ctx_for "$dc"); pod=$(pod_for "$dc")
+    npods=$(ch_pods "$ctx" "$dc" | grep -c .)
+    read -r tot act ro < <(chq "$ctx" "$dc" "$pod" \
+        "SELECT total_replicas, active_replicas, is_readonly FROM system.replicas WHERE table='otel_local'" \
+        --format TSV | tr '\t' ' ')
+    assert_eq "$dc: 2 clickhouse-server pods Running"   2 "$npods"
+    assert_eq "$dc: otel_local total_replicas = 2"      2 "$tot"
+    assert_eq "$dc: otel_local active_replicas = 2"     2 "$act"
+    assert_eq "$dc: otel_local not read-only (Keeper ok)" 0 "$ro"
+done
+
+# ── 6c. Write path across replicas: write one replica, read it on the other ───
+# All writes target otel_local (never a Distributed table). Insert on replica 0,
+# SYSTEM SYNC on replica 1, and assert the row is present there -- proving
+# ReplicatedMergeTree replicates writes across the pods the VIP fans out to.
+# Uses a unique probe id and cleans it up so the seed invariant (1 row) holds.
+log "Write path: insert on replica 0 replicates to replica 1"
+PROBE_ID=7777
+for dc in $DCS; do
+    ctx=$(ctx_for "$dc")
+    pods=()
+    while IFS= read -r line; do [ -n "$line" ] && pods+=("$line"); done < <(ch_pods "$ctx" "$dc")
+    if [ "${#pods[@]}" -lt 2 ]; then
+        info "SKIP: $dc has <2 replicas (single-replica deployment)"
+        continue
+    fi
+    p0="${pods[0]}"; p1="${pods[1]}"
+    chq "$ctx" "$dc" "$p0" \
+        "INSERT INTO default.otel_local (id,event_time,payload) VALUES ($PROBE_ID, now(), 'replica probe on $p0')" >/dev/null
+    chq "$ctx" "$dc" "$p1" "SYSTEM SYNC REPLICA default.otel_local" >/dev/null
+    seen=$(chq "$ctx" "$dc" "$p1" "SELECT count() FROM default.otel_local WHERE id=$PROBE_ID")
+    assert_eq "$dc: write on $p0 replicated to $p1" 1 "$seen"
+    # Cleanup on p0; the delete replicates back to p1 and restores the 1-row seed.
+    chq "$ctx" "$dc" "$p0" "DELETE FROM default.otel_local WHERE id=$PROBE_ID" >/dev/null
+    chq "$ctx" "$dc" "$p1" "SYSTEM SYNC REPLICA default.otel_local" >/dev/null
+done
+
+# ── 6d. Read path from every replica: any VIP target serves cross-DC reads ────
+# The region NodePort can route a federated read to EITHER replica, and each
+# replica carries its own copy of the global remote_servers config + TLS certs +
+# cluster secret. Query otel_global directly on every pod: all must return the
+# full 3-region fan-out, or the VIP would intermittently hit a broken replica.
+log "Read path: otel_global returns all 3 regions from EVERY replica"
+for dc in $DCS; do
+    ctx=$(ctx_for "$dc")
+    for p in $(ch_pods "$ctx" "$dc"); do
+        reg=$(chq "$ctx" "$dc" "$p" "SELECT uniqExact(region) FROM default.otel_global")
+        assert_eq "$dc/$p: otel_global returns 3 regions" 3 "$reg"
+    done
 done
 
 # ── 7. Shard pruning ──────────────────────────────────────────────────────────

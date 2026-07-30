@@ -192,8 +192,12 @@ reconciles the CRs and creates:
 
 - A **KeeperCluster** (`{region}-keeper`): single-node Keeper pod
   (`{region}-keeper-0-0`) with headless service `{region}-keeper-headless`.
-- A **ClickHouseCluster** (`{region}`): single shard, single replica CH pod
-  (`{region}-clickhouse-0-0-0`) with headless service `{region}-clickhouse-headless`.
+- A **ClickHouseCluster** (`{region}`): single shard, **2 replicas**
+  (`{region}-clickhouse-0-0-0`, `{region}-clickhouse-0-1-0`) with headless
+  service `{region}-clickhouse-headless`. `otel_local` is `ReplicatedMergeTree`,
+  so Keeper keeps both replicas in sync, and the region's NodePort VIP
+  load-balances reads across both — no `remote_servers` change is needed to add
+  a replica (see [Region VIP vs. per-pod hosts](#region-vip-vs-per-pod-hosts)).
   Its `spec.settings.extraUsersConfig` sets the shard-pruning defaults on the
   `default` profile (see
   [Shard pruning](#shard-pruning-and-optimize_skip_unused_shards)), and
@@ -451,10 +455,15 @@ localhost` to avoid a DNS bootstrap race (the pod's own headless-service DNS
 entry isn't available until after the pod starts). For production, use a
 3-node ensemble and replace `localhost` with each node's FQDN.
 
-### Single replica per region
-`replicaCount: 1` means `ReplicatedMergeTree` behaves like `MergeTree` - no
-intra-region replication. Increment `replicaCount` in `values.yaml` and re-run
-`helm upgrade` to add replicas.
+### Two replicas per region
+Each `ClickHouseCluster` sets `spec.replicas: 2`, so `otel_local`
+(`ReplicatedMergeTree`) has a real intra-region replica that Keeper keeps in
+sync. Because remote shards are addressed by the region **VIP** (NodePort), not
+per-pod hosts, adding or removing a replica needs no `remote_servers` change —
+change `spec.replicas` and re-apply. `verify.sh` covers this: replica topology
+(2 in-sync replicas), write replication across replicas, and cross-DC reads
+from every replica. Keeper stays single-node for the demo; use a 3-node
+ensemble in production for HA.
 
 ### Dynamic federation patching
 `global` remote_servers are not in the committed `values.yaml` files

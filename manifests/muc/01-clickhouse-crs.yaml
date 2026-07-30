@@ -13,7 +13,7 @@ metadata:
   name: muc
   namespace: muc
 spec:
-  replicas: 1
+  replicas: 2
   shards: 1
   keeperClusterRef:
     name: muc
