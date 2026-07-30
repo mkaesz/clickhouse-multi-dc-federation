@@ -545,6 +545,30 @@ did not apply. Alternatively, run `SYSTEM FLUSH LOGS` then check
 `system.query_log.read_rows` — a pruned single-region query reads fewer rows
 than an unpruned full-scan of the same data.
 
+#### `force_optimize_skip_unused_shards`
+`optimize_skip_unused_shards` is best-effort: when a query cannot be pruned it
+silently falls back to fanning out to every shard. `force_optimize_skip_unused_shards`
+turns that fallback into a hard error instead — if pruning is enabled but not
+possible, the query fails with `Code: 507 ... (UNABLE_TO_SKIP_UNUSED_SHARDS)`.
+Enabling it (`1` throws only when the table has a sharding key; `2` throws
+regardless) is useful for **guaranteeing** that a class of queries always hits a
+single region — a query that accidentally omits the `region` predicate, or uses
+a non-prunable one, fails loudly instead of quietly scanning all three regions
+and inflating cross-region traffic. It also doubles as an assertion in tests and
+`EXPLAIN`-free CI checks (this is how `verify.sh` proves pruning is live).
+
+The downside is that it rejects **every** query that cannot prune, including
+legitimate ones. Against `otel_global` that means any full-fan-out read throws:
+an unfiltered `SELECT count()`, a `GROUP BY region` rollup across all regions, or
+a negated predicate like `WHERE region != 'FRA'` — precisely the cross-region
+aggregations `otel_global` exists to serve. For that reason it is **not** set as
+a profile default here; leaving it off keeps rollups working while still allowing
+it to be switched on per query (`SETTINGS force_optimize_skip_unused_shards = 1`)
+whenever you want to assert that a specific query pruned. If you do want to
+enforce single-region access for a group of callers, scope it to a dedicated
+role/profile (`ALTER ROLE ... SETTINGS force_optimize_skip_unused_shards = 1`)
+rather than the shared `default` profile.
+
 ### TLS for cross-region communication
 `scripts/setup-tls.sh` adds mutual TLS to all CH-to-CH federation traffic.
 It is called automatically by `setup.sh`.
