@@ -119,21 +119,24 @@ patch_cr ham "$HAM_CTX"
 
 # ── Wait for operator to roll out updated config ───────────────────────────────
 # The extraConfig change triggers RequiresRestart=true, so the operator
-# will restart CH pods with the new config. Wait for them to come back.
-
+# will restart CH pods with the new config. Wait for ALL of them to come back:
+# returning while a replica is still restarting risks interrupting its
+# Replicated `default` DB init and wedging it (see reconcile_replicas in
+# setup.sh). Each region runs 2 replicas.
+CH_REPLICAS=2
 wait_for_ch_pod() {
     local dc="$1" ctx="$2"
     local max=60 i=0
-    info "Waiting for $dc CH pod to be Ready after config patch ..."
+    info "Waiting for $dc CH pods ($CH_REPLICAS) to be Ready after config patch ..."
     until [ "$(kubectl get pods --context "$ctx" -n "$dc" \
         -l 'clickhouse.com/role=clickhouse-server' \
         -o jsonpath='{range .items[*]}{range .status.containerStatuses[*]}{.ready}{"\n"}{end}{end}' 2>/dev/null \
-        | grep -c '^true$' || true)" -ge 1 ]; do
+        | grep -c '^true$' || true)" -ge "$CH_REPLICAS" ]; do
         i=$((i+1))
         [ "$i" -ge "$max" ] && echo "  ERROR: Timed out" && exit 1
         sleep 5
     done
-    info "  $dc CH pod Ready"
+    info "  $dc CH pods Ready"
 }
 
 log "Waiting for CH pods to re-stabilize after config patch"
