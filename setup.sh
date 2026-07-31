@@ -108,18 +108,18 @@ install_operator() {
 
     for dc in fra muc ham; do
         local ctx="kind-clickhouse-multi-region-federation-demo-${dc}"
-        if helm status clickhouse-operator --kube-context "$ctx" -n "$OPERATOR_NS" &>/dev/null; then
-            info "Operator already installed in $dc, skipping"
-        else
-            info "Installing operator in $dc"
-            helm install clickhouse-operator oci://ghcr.io/clickhouse/clickhouse-operator-helm \
-                --kube-context "$ctx" \
-                --create-namespace \
-                --namespace "$OPERATOR_NS" \
-                --set webhook.enabled=false \
-                --set certManager.enabled=false \
-                --wait --timeout 3m
-        fi
+        info "Installing operator in $dc"
+        # `upgrade --install` is idempotent: installs if absent, no-ops/upgrades
+        # if present. Plain `helm install` fails with "cannot reuse a name that
+        # is still in use" when a release lingers (e.g. a re-run over a cluster
+        # teardown didn't fully delete), which aborted setup before schemas.
+        helm upgrade --install clickhouse-operator oci://ghcr.io/clickhouse/clickhouse-operator-helm \
+            --kube-context "$ctx" \
+            --create-namespace \
+            --namespace "$OPERATOR_NS" \
+            --set webhook.enabled=false \
+            --set certManager.enabled=false \
+            --wait --timeout 3m
     done
 }
 
