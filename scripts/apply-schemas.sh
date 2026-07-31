@@ -114,11 +114,55 @@ wait_for_ch() {
     info "OK"
 }
 
+# Transient errors that appear briefly after a replica restart, while the
+# Replicated database is still stabilizing (e.g. the {uuid} macro can't resolve
+# until the DB re-registers, or a coordination call is retried). Safe to retry:
+# the schema DDL is all IF NOT EXISTS.
+TRANSIENT_RE="Macro 'uuid'|QUERY_WAS_CANCELLED|TABLE_IS_READ_ONLY|Coordination|KEEPER_EXCEPTION|ZooKeeper|Not enough|TIMEOUT_EXCEEDED"
+
 run_sql() {
-    local ctx="$1" ns="$2" pod="$3" file="$4"
+    local ctx="$1" ns="$2" pod="$3" file="$4" attempt out
     info "--> [$ns] $(basename "$file")"
-    kubectl exec -i --context "$ctx" -n "$ns" "$pod" -- \
-        clickhouse client --multiquery --echo < "$file"
+    for attempt in 1 2 3 4 5; do
+        out=$(kubectl exec -i --context "$ctx" -n "$ns" "$pod" -- \
+            clickhouse client --multiquery < "$file" 2>&1)
+        if ! echo "$out" | grep -qiE "DB::Exception|Code: [0-9]+"; then
+            return 0
+        fi
+        if echo "$out" | grep -qiE "$TRANSIENT_RE"; then
+            info "    transient error (attempt $attempt/5), retrying in 6s: $(echo "$out" | grep -iE 'Code:' | head -1 | cut -c1-90)"
+            sleep 6
+            continue
+        fi
+        echo "$out"
+        echo "ERROR: applying $(basename "$file") failed on $ns/$pod"
+        exit 1
+    done
+    echo "$out"
+    echo "ERROR: $(basename "$file") still failing on $ns/$pod after retries"
+    exit 1
+}
+
+# Confirm the Replicated `default` DB can actually run {uuid}-based DDL before we
+# apply the real schemas. Right after heal_dc restarts a replica, a CREATE can
+# briefly fail with "Macro 'uuid' ... only supported ..." until the DB
+# re-stabilizes. Loop a throwaway ReplicatedMergeTree create/drop until it
+# succeeds, so schema application never races that window.
+wait_ddl_ready() {
+    local ctx="$1" ns="$2" pod="$3" i out
+    for i in $(seq 1 24); do
+        out=$(kubectl exec --context "$ctx" -n "$ns" "$pod" -- clickhouse client \
+            --query "CREATE TABLE IF NOT EXISTS default.zz_ddl_canary (id UInt64) ENGINE=ReplicatedMergeTree() ORDER BY id" 2>&1)
+        if ! echo "$out" | grep -qiE "DB::Exception|Code: [0-9]+"; then
+            kubectl exec --context "$ctx" -n "$ns" "$pod" -- clickhouse client \
+                --query "DROP TABLE IF EXISTS default.zz_ddl_canary SYNC" >/dev/null 2>&1 || true
+            info "[$ns] Replicated DB is DDL-ready"
+            return 0
+        fi
+        sleep 5
+    done
+    echo "ERROR: [$ns] Replicated DB never became DDL-ready (last: $(echo "$out" | grep -iE 'Code:' | head -1))"
+    exit 1
 }
 
 log "Discovering CH pods"
@@ -144,6 +188,11 @@ POD_FRA=$(healthy_pod "$FRA_CTX" fra)
 POD_MUC=$(healthy_pod "$MUC_CTX" muc)
 POD_HAM=$(healthy_pod "$HAM_CTX" ham)
 info "Schema targets — FRA: $POD_FRA  MUC: $POD_MUC  HAM: $POD_HAM"
+
+log "Waiting for Replicated DB to be DDL-ready (post-heal stabilization)"
+wait_ddl_ready "$FRA_CTX" fra "$POD_FRA"
+wait_ddl_ready "$MUC_CTX" muc "$POD_MUC"
+wait_ddl_ready "$HAM_CTX" ham "$POD_HAM"
 
 log "Step 1: Tier 1 — local tables (ReplicatedMergeTree)"
 run_sql "$FRA_CTX" fra "$POD_FRA" "$SCHEMAS/01_tier1_local/fra_otel_local.sql"
