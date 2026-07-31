@@ -124,8 +124,10 @@ run_sql() {
     local ctx="$1" ns="$2" pod="$3" file="$4" attempt out
     info "--> [$ns] $(basename "$file")"
     for attempt in 1 2 3 4 5; do
+        # `|| true`: clickhouse client exits non-zero on a CH error, which under
+        # `set -e` would abort the script before this retry loop can react.
         out=$(kubectl exec -i --context "$ctx" -n "$ns" "$pod" -- \
-            clickhouse client --multiquery < "$file" 2>&1)
+            clickhouse client --multiquery < "$file" 2>&1) || true
         if ! echo "$out" | grep -qiE "DB::Exception|Code: [0-9]+"; then
             return 0
         fi
@@ -151,8 +153,10 @@ run_sql() {
 wait_ddl_ready() {
     local ctx="$1" ns="$2" pod="$3" i out
     for i in $(seq 1 24); do
+        # `|| true`: don't let `set -e` abort on the canary's own CH error --
+        # that transient failure is exactly what we're looping to ride out.
         out=$(kubectl exec --context "$ctx" -n "$ns" "$pod" -- clickhouse client \
-            --query "CREATE TABLE IF NOT EXISTS default.zz_ddl_canary (id UInt64) ENGINE=ReplicatedMergeTree() ORDER BY id" 2>&1)
+            --query "CREATE TABLE IF NOT EXISTS default.zz_ddl_canary (id UInt64) ENGINE=ReplicatedMergeTree() ORDER BY id" 2>&1) || true
         if ! echo "$out" | grep -qiE "DB::Exception|Code: [0-9]+"; then
             kubectl exec --context "$ctx" -n "$ns" "$pod" -- clickhouse client \
                 --query "DROP TABLE IF EXISTS default.zz_ddl_canary SYNC" >/dev/null 2>&1 || true
