@@ -185,60 +185,6 @@ apply_schemas() {
     bash "$SCRIPT_DIR/scripts/apply-schemas.sh"
 }
 
-# ── Step 9b: Reconcile replicas ──────────────────────────────────────────────
-# apply-schemas targets one pod per DC and relies on the Replicated `default`
-# database to propagate DDL to the other replica. If that replica's Replicated
-# DB got wedged during the earlier config-patch restarts (Keeper has no
-# log_ptr for it, so it loops in DDLWorker init and never replays the log), it
-# ends up with ZERO tables -- and the region VIP will intermittently route
-# reads to it and fail. Storage is emptyDir, so the fix is a clean restart:
-# the pod re-initializes, registers fresh in Keeper, and replays the full DDL
-# log. Verify every pod has all 3 otel tables; restart and re-check any that
-# don't. This is what a fresh `bash setup.sh` needs to be reliable at 2+
-# replicas.
-reconcile_replicas() {
-    log "Reconciling replicas: every CH pod must carry all 3 otel tables"
-    local expected=3
-    for entry in "fra:$FRA_CTX" "muc:$MUC_CTX" "ham:$HAM_CTX"; do
-        local dc="${entry%%:*}" ctx="${entry##*:}"
-        local pods
-        pods=$(kubectl get pods --context "$ctx" -n "$dc" \
-            -l "clickhouse.com/role=clickhouse-server" \
-            --field-selector=status.phase=Running \
-            -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null)
-        local pod
-        for pod in $pods; do
-            local restarts=0 n synced t
-            while true; do
-                # Poll ~50s for the Replicated DB to replay the DDL log before
-                # deciding the replica is wedged (avoids spurious restarts on
-                # normal sync latency).
-                synced=0
-                for t in 1 2 3 4 5 6 7 8 9 10; do
-                    n=$(kubectl exec --context "$ctx" -n "$dc" "$pod" -- clickhouse client \
-                        --query "SELECT count() FROM system.tables WHERE database='default' AND name IN ('otel_local','otel_regional','otel_global')" 2>/dev/null || echo 0)
-                    [ -z "$n" ] && n=0
-                    if [ "$n" -ge "$expected" ]; then synced=1; break; fi
-                    sleep 5
-                done
-                if [ "$synced" -eq 1 ]; then
-                    info "$dc/$pod: $n/$expected tables OK"
-                    break
-                fi
-                restarts=$((restarts + 1))
-                if [ "$restarts" -gt 2 ]; then
-                    echo "ERROR: $dc/$pod still has $n/$expected tables after $restarts restarts"
-                    exit 1
-                fi
-                info "$dc/$pod: only $n/$expected tables — restarting to re-sync Replicated DB (restart $restarts)"
-                kubectl delete pod --context "$ctx" -n "$dc" "$pod" --grace-period=5 >/dev/null 2>&1 || true
-                kubectl wait pod --context "$ctx" -n "$dc" "$pod" \
-                    --for=condition=Ready --timeout=180s >/dev/null 2>&1 || true
-            done
-        done
-    done
-}
-
 # ── Step 10: Print access summary ─────────────────────────────────────────────
 
 print_summary() {
@@ -280,5 +226,4 @@ wait_for_clickhouse
 patch_federation
 setup_tls
 apply_schemas
-reconcile_replicas
 print_summary

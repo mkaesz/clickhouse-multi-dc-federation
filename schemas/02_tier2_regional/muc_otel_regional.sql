@@ -7,6 +7,6 @@
 -- needed to prune shards on read (via optimize_skip_unused_shards), and would
 -- then have to be a deterministic column expression -- not rand().
 
-CREATE TABLE IF NOT EXISTS default.otel_regional ON CLUSTER 'default'
+CREATE TABLE IF NOT EXISTS default.otel_regional
 AS default.otel_local
 ENGINE = Distributed('default', default, otel_local);

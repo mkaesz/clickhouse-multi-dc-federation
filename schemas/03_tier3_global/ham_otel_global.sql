@@ -3,7 +3,7 @@
 -- global remote_servers definition (3 shards: FRA/MUC/HAM) to be present,
 -- and requires the default.regionToShard dictionary (see dict_regionToShard.sql).
 
-CREATE TABLE IF NOT EXISTS default.otel_global ON CLUSTER 'default'
+CREATE TABLE IF NOT EXISTS default.otel_global
 AS default.otel_local
 ENGINE = Distributed(
     'global',
