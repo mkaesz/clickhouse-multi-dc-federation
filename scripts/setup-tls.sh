@@ -141,9 +141,7 @@ patch_tls_cr() {
     local fra_host muc_host ham_host
     local fra_port=30941 muc_port=30942 ham_port=30943
 
-    # Local DC uses loopback (is_local=1); remote shards use the target DC's
-    # NodePort, which fronts every clickhouse-server pod in that region (the
-    # region VIP), so replica scaling needs no remote_servers change.
+    # Local DC uses loopback (is_local=1), others use NodePort IPs
     case "$dc" in
         fra) fra_host="localhost"; fra_port=9440; muc_host="$MUC_IP"; ham_host="$HAM_IP" ;;
         muc) fra_host="$FRA_IP";  muc_host="localhost"; muc_port=9440; ham_host="$HAM_IP" ;;

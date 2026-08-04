@@ -104,7 +104,7 @@ Readers are granted **directly on the user** (not via a role) because the
 ├── setup.sh                                       # execute to setup the demo
 ├── teardown.sh                                    # execute to destroy the demo
 ├── manifests/
-│   ├── global_remote_servers.xml           # Reference config (region VIPs + cluster secret)
+│   ├── global_remote_servers.xml           # Reference config (per-pod FQDNs + cluster secret)
 │   ├── fra/
 │   │   ├── kind.yaml                              # kind cluster: clickhouse-multi-region-federation-demo-fra
 │   │   ├── 00-namespace.yaml
@@ -195,9 +195,7 @@ reconciles the CRs and creates:
 - A **ClickHouseCluster** (`{region}`): single shard, **2 replicas**
   (`{region}-clickhouse-0-0-0`, `{region}-clickhouse-0-1-0`) with headless
   service `{region}-clickhouse-headless`. `otel_local` is `ReplicatedMergeTree`,
-  so Keeper keeps both replicas in sync, and the region's NodePort VIP
-  load-balances reads across both — no `remote_servers` change is needed to add
-  a replica (see [Region VIP vs. per-pod hosts](#region-vip-vs-per-pod-hosts)).
+  so Keeper keeps both replicas in sync.
   Its `spec.settings.extraUsersConfig` sets the shard-pruning defaults on the
   `default` profile (see
   [Shard pruning](#shard-pruning-and-optimize_skip_unused_shards)), and
@@ -219,13 +217,8 @@ HAM node IP: 172.18.0.4  → shard 2 in global (localhost:9001 for HAM, NodePort
 ```
 
 Each region uses `localhost:9001` for its own shard so ClickHouse marks it
-`is_local=1` and reads locally instead of going through a network hop. Each
-remote shard is a single endpoint = the target region's NodePort, which selects
-every ClickHouse pod in that region — i.e. the NodePort acts as the **region
-VIP**, so scaling replicas within a region needs no `remote_servers` change.
-(In a single- or multi-cluster production deployment, use the region's Service
-DNS or LoadBalancer hostname instead of a node IP; see
-`manifests/global_remote_servers.xml`.)
+`is_local=1` and reads locally instead of going through a network hop; the two
+remote shards are reached over the target regions' NodePorts.
 
 The patch also sets a shared cluster `<secret>` on `global` (generated once in
 `setup.sh`, identical on all three DCs). See
@@ -458,12 +451,9 @@ entry isn't available until after the pod starts). For production, use a
 ### Two replicas per region
 Each `ClickHouseCluster` sets `spec.replicas: 2`, so `otel_local`
 (`ReplicatedMergeTree`) has a real intra-region replica that Keeper keeps in
-sync. Because remote shards are addressed by the region **VIP** (NodePort), not
-per-pod hosts, adding or removing a replica needs no `remote_servers` change —
-change `spec.replicas` and re-apply. `verify.sh` covers this: replica topology
-(2 in-sync replicas), write replication across replicas, and cross-DC reads
-from every replica. Keeper stays single-node for the demo; use a 3-node
-ensemble in production for HA.
+sync. `verify.sh` covers this: replica topology (2 in-sync replicas), write
+replication across replicas, and cross-DC reads from every replica. Keeper
+stays single-node for the demo; use a 3-node ensemble in production for HA.
 
 ### Dynamic federation patching
 `global` remote_servers are not in the committed `values.yaml` files
@@ -471,24 +461,6 @@ because the kind node IPs are not known until the clusters exist.
 `patch-federation.sh` discovers IPs at runtime and injects them via
 `helm upgrade --reuse-values`. Running `setup.sh` again is idempotent: the
 patch step overwrites with current IPs.
-
-### Region VIP vs. per-pod hosts
-Each remote shard in `global` is a **single** endpoint that fronts every
-replica in that region, not a list of pod hostnames:
-
-- In the kind demo that endpoint is the region's **NodePort**
-  (`{region}-clickhouse-nodeport`), whose selector matches all
-  `clickhouse-server` pods in the region, so kube-proxy load-balances across
-  them. Adding or removing **replicas** within a region therefore needs no
-  `remote_servers` change; only adding/removing a whole **region** (a shard)
-  does — and that also updates `regionToShard`.
-- In production, use the region's **Service DNS or LoadBalancer hostname**
-  (see `manifests/global_remote_servers.xml`). The VIP must front exactly one
-  region's nodes: shard N must always be region N, or the
-  `dictGet(regionToShard, region)` sharding key mis-prunes.
-- The **home-region** shard stays on `localhost` on each node so it is
-  `is_local=1` (local read, no network hop, no TLS). Routing the home region
-  through its own VIP would work but forfeit that optimization.
 
 ### Cross-region RBAC
 A read of `otel_global` expands down the chain

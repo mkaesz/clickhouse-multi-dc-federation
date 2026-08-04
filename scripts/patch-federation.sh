@@ -54,15 +54,6 @@ patch_cr() {
     local ctx="$2"
     # Each DC's own shard uses localhost:9001 so ClickHouse treats it as local
     # (ReadFromLocal instead of ReadFromRemote). Cross-DC shards use NodePorts.
-    #
-    # A remote shard is a SINGLE replica entry = the target DC's NodePort. The
-    # NodePort Service (fra-clickhouse-nodeport) selects every clickhouse-server
-    # pod in that region, so kube-proxy already load-balances across all of the
-    # region's replicas -- it IS the region VIP. Scaling replicas within a
-    # region therefore needs NO remote_servers change; only adding/removing a
-    # whole region (a shard) does. In a single-cluster / real multi-cluster
-    # deployment, swap the NodePort IP for the region's Service DNS or
-    # LoadBalancer hostname (see manifests/global_remote_servers.xml).
     local fra_host muc_host ham_host
     # The operator sets tcp_port=9001 (not the default 9000).
     # ClickHouse marks a shard is_local=1 only when host=localhost AND port=tcp_port.

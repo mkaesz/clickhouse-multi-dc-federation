@@ -101,7 +101,7 @@ run_query "$HAM_CTX" ham "$POD_HAM" \
     "INSERT INTO default.otel_local (id, event_time, payload) VALUES (3, now(), 'test from HAM')"
 
 # Seeds were inserted on one replica per DC. With >1 replica the cross-DC reads
-# below fan out through each region's NodePort VIP, which can land on the OTHER
+# below fan out through each region's NodePort, which can land on the OTHER
 # replica -- so force every replica to catch up before asserting counts, or a
 # read could race replication and see a short row. Harmless on single-replica.
 log "Sync all replicas so cross-DC reads don't race replication"
@@ -159,8 +159,8 @@ done
 
 # ── 6b. Replica topology: each region runs a healthy 2-replica set ────────────
 # otel_local is ReplicatedMergeTree; scaling spec.replicas adds a physical
-# replica that Keeper keeps in sync. This is the precondition for the VIP tests
-# below: the region's NodePort load-balances reads across exactly these pods.
+# replica that Keeper keeps in sync. This is the precondition for the read/write
+# tests below: the region's NodePort load-balances reads across exactly these pods.
 log "Replica topology: 2 in-sync replicas of otel_local per region"
 for dc in $DCS; do
     ctx=$(ctx_for "$dc"); pod=$(pod_for "$dc")
@@ -177,7 +177,7 @@ done
 # ── 6c. Write path across replicas: write one replica, read it on the other ───
 # All writes target otel_local (never a Distributed table). Insert on replica 0,
 # SYSTEM SYNC on replica 1, and assert the row is present there -- proving
-# ReplicatedMergeTree replicates writes across the pods the VIP fans out to.
+# ReplicatedMergeTree replicates writes across the region's replicas.
 # Uses a unique probe id and cleans it up so the seed invariant (1 row) holds.
 log "Write path: insert on replica 0 replicates to replica 1"
 PROBE_ID=7777
@@ -200,11 +200,11 @@ for dc in $DCS; do
     chq "$ctx" "$dc" "$p1" "SYSTEM SYNC REPLICA default.otel_local" >/dev/null
 done
 
-# ── 6d. Read path from every replica: any VIP target serves cross-DC reads ────
+# ── 6d. Read path from every replica: any replica serves cross-DC reads ───────
 # The region NodePort can route a federated read to EITHER replica, and each
 # replica carries its own copy of the global remote_servers config + TLS certs +
 # cluster secret. Query otel_global directly on every pod: all must return the
-# full 3-region fan-out, or the VIP would intermittently hit a broken replica.
+# full 3-region fan-out, or a read routed to that replica would fail.
 log "Read path: otel_global returns all 3 regions from EVERY replica"
 for dc in $DCS; do
     ctx=$(ctx_for "$dc")
